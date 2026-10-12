@@ -12,6 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from homemesh.common.proc import run_quiet
 from homemesh.protocol.hardware import GPUInfo, GPUTelemetry
 
 QUERY_FIELDS = [
@@ -94,7 +95,7 @@ def rows_to_gpus(rows: list[dict[str, str]]) -> list[GPUInfo]:
 
 
 def _run(binary: str, fields: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    return run_quiet(
         [binary, f"--query-gpu={','.join(fields)}", "--format=csv,noheader,nounits"],
         capture_output=True, text=True, timeout=15, check=False,
     )

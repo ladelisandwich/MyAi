@@ -9,6 +9,7 @@ from pathlib import Path
 
 import psutil
 
+from homemesh.common.proc import run_quiet
 from homemesh.protocol.hardware import CPUInfo, DiskInfo, MemoryInfo
 
 _INTERESTING_FLAGS = ("avx", "avx2", "avx512f", "avx512_vnni", "avx_vnni", "fma", "f16c", "amx_tile",
@@ -46,7 +47,7 @@ def _cpu_model_windows() -> str | None:
 
 def _cpu_model_macos() -> str | None:
     try:
-        out = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True,
+        out = run_quiet(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True,
                              timeout=5, check=False)
         return out.stdout.strip() or None
     except (OSError, subprocess.SubprocessError):

@@ -65,6 +65,9 @@ First working version.
 * `scripts/bench.py` exited 0 when every chat failed; it now waits for a usable model and fails honestly.
 * On mixed-GPU machines the coordinator treated the free memory of only the GPUs that report it
   (on Windows: NVIDIA) as the node's free VRAM; it is now "unknown" unless every counted GPU reports it.
+* On Windows a console window flashed every few seconds: the windowless HomeMesh process started
+  nvidia-smi (every heartbeat) and PowerShell without CREATE_NO_WINDOW. All helper programs now run
+  through one function that hides their window; a test forbids bypassing it.
 * Ollama runner failures (`error starting llama-server`, `llama-server process has terminated`) were
   reported as "model not installed" because any message containing "not found" was treated as a missing
   model; they are now `backend_runner_failed` with a diagnostic hint. "Load" now works for

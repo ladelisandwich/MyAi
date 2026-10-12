@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import subprocess
 
+from homemesh.common.proc import run_quiet
 from homemesh.protocol.hardware import GPUInfo
 
 
@@ -37,7 +38,7 @@ def parse_system_profiler(text: str) -> list[GPUInfo]:
 
 def detect_macos_gpus() -> tuple[list[GPUInfo], list[str]]:
     try:
-        proc = subprocess.run(["system_profiler", "SPDisplaysDataType", "-json"], capture_output=True,
+        proc = run_quiet(["system_profiler", "SPDisplaysDataType", "-json"], capture_output=True,
                               text=True, timeout=30, check=False)
         return parse_system_profiler(proc.stdout), []
     except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:

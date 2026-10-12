@@ -61,3 +61,34 @@ def test_tls_init_new_ca_replaces_ca_and_keeps_old(tmp_path):
     assert ca_fingerprint(tmp_path / "data" / "tls" / "ca.pem") != first
     kept = list((tmp_path / "data").glob("tls-replaced-*"))
     assert len(kept) == 1 and ca_fingerprint(kept[0] / "ca.pem") == first
+
+
+def test_helper_programs_never_open_a_console_window_on_windows(monkeypatch):
+    """HomeMesh runs windowless (pythonw); every nvidia-smi/PowerShell call must pass CREATE_NO_WINDOW,
+    otherwise Windows flashes a terminal window on each heartbeat."""
+    import subprocess
+    import sys
+
+    from homemesh.common import proc
+
+    seen = []
+    monkeypatch.setattr(subprocess, "run", lambda args, **kw: seen.append(kw) or subprocess.CompletedProcess(args, 0, "", ""))
+    monkeypatch.setattr(sys, "platform", "win32")
+    proc.run_quiet(["nvidia-smi"], capture_output=True)
+    proc.run_quiet(["x"], creationflags=0x200)
+    assert seen[0]["creationflags"] == proc.CREATE_NO_WINDOW and seen[0]["capture_output"] is True
+    assert seen[1]["creationflags"] == 0x200 | proc.CREATE_NO_WINDOW
+    monkeypatch.setattr(sys, "platform", "linux")
+    proc.run_quiet(["nvidia-smi"])
+    assert "creationflags" not in seen[2]
+
+
+def test_no_direct_subprocess_run_outside_the_helper():
+    from pathlib import Path
+
+    import homemesh
+
+    root = Path(homemesh.__file__).parent
+    offenders = [str(f.relative_to(root)) for f in root.rglob("*.py")
+                 if f.name != "proc.py" and "subprocess.run(" in f.read_text(encoding="utf-8")]
+    assert offenders == [], f"use homemesh.common.proc.run_quiet instead: {offenders}"

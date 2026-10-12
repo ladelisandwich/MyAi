@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 
 from homemesh.common.paths import AppPaths
+from homemesh.common.proc import run_quiet
 
 UNIT_NAME = "homemesh.service"
 AUTOSTART_NAME = "HomeMesh"
@@ -56,7 +57,7 @@ def _win_autostart(enable: bool | None) -> bool:
 def systemd_available() -> bool:
     if not sys.platform.startswith("linux") or not shutil.which("systemctl"):
         return False
-    r = subprocess.run(["systemctl", "--user", "show-environment"], capture_output=True, text=True, check=False)
+    r = run_quiet(["systemctl", "--user", "show-environment"], capture_output=True, text=True, check=False)
     return r.returncode == 0
 
 
@@ -102,8 +103,8 @@ def install_service(paths: AppPaths) -> str:
         p = unit_path()
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(render_unit(paths), encoding="utf-8")
-        subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
-        subprocess.run(["systemctl", "--user", "enable", UNIT_NAME], check=False)
+        run_quiet(["systemctl", "--user", "daemon-reload"], check=False)
+        run_quiet(["systemctl", "--user", "enable", UNIT_NAME], check=False)
         return (f"Installed {p} and enabled it at login. Start now with 'homemesh start'.\n"
                 f"To keep HomeMesh running when you are logged out, run once: loginctl enable-linger {os.environ.get('USER', '$USER')}")
     if sys.platform == "win32":
@@ -122,11 +123,11 @@ def uninstall_service() -> str:
     if sys.platform.startswith("linux"):
         p = unit_path()
         if systemd_available():
-            subprocess.run(["systemctl", "--user", "disable", "--now", UNIT_NAME], check=False, capture_output=True)
+            run_quiet(["systemctl", "--user", "disable", "--now", UNIT_NAME], check=False, capture_output=True)
         if p.exists():
             p.unlink()
             if systemd_available():
-                subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
+                run_quiet(["systemctl", "--user", "daemon-reload"], check=False)
             return f"Removed {p}. Your data was not touched."
         return "No systemd unit was installed."
     if sys.platform == "win32":
@@ -170,7 +171,7 @@ def start(paths: AppPaths) -> str:
     if read_pid(paths):
         return "HomeMesh is already running."
     if sys.platform.startswith("linux") and unit_path().exists() and systemd_available():
-        r = subprocess.run(["systemctl", "--user", "start", UNIT_NAME], capture_output=True, text=True, check=False)
+        r = run_quiet(["systemctl", "--user", "start", UNIT_NAME], capture_output=True, text=True, check=False)
         return "Started via systemd." if r.returncode == 0 else f"systemctl failed: {r.stderr.strip()}"
     # Portable fallback: detached background process logging to the data directory.
     paths.logs_dir.mkdir(parents=True, exist_ok=True)
@@ -190,9 +191,9 @@ def start(paths: AppPaths) -> str:
 
 def stop(paths: AppPaths, timeout: float = 30.0, *, force: bool = False) -> str:
     if sys.platform.startswith("linux") and unit_path().exists() and systemd_available():
-        r = subprocess.run(["systemctl", "--user", "is-active", UNIT_NAME], capture_output=True, text=True, check=False)
+        r = run_quiet(["systemctl", "--user", "is-active", UNIT_NAME], capture_output=True, text=True, check=False)
         if r.stdout.strip() == "active":
-            subprocess.run(["systemctl", "--user", "stop", UNIT_NAME], check=False)
+            run_quiet(["systemctl", "--user", "stop", UNIT_NAME], check=False)
             return "Stopped via systemd."
     pid = read_pid(paths)
     if not pid:
@@ -209,7 +210,7 @@ def stop(paths: AppPaths, timeout: float = 30.0, *, force: bool = False) -> str:
         time.sleep(0.3)
     if force:
         if sys.platform == "win32":
-            subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, check=False)
+            run_quiet(["taskkill", "/F", "/PID", str(pid)], capture_output=True, check=False)
         else:
             os.kill(pid, signal.SIGKILL)
         return (f"Process {pid} did not stop within {timeout:.0f}s and was terminated forcibly. "

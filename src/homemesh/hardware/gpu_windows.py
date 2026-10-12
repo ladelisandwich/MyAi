@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import subprocess
 
+from homemesh.common.proc import run_quiet
 from homemesh.protocol.hardware import GPUInfo
 
 _PS_SCRIPT = r"""
@@ -83,7 +84,7 @@ def parse_windows_gpu_json(text: str) -> list[GPUInfo]:
 
 def detect_windows_gpus() -> tuple[list[GPUInfo], list[str]]:
     try:
-        proc = subprocess.run(
+        proc = run_quiet(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", _PS_SCRIPT],
             capture_output=True, text=True, timeout=30, check=False,
         )
