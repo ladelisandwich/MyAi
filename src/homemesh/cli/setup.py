@@ -218,7 +218,7 @@ def run_setup(args: argparse.Namespace, paths: AppPaths) -> int:
     print(f"\nDone. Start HomeMesh with 'homemesh start' (or 'homemesh run') and open {cfg.advertised_url()}")
     if cfg.server.tls_mode == "self_signed":
         print("Your browser will warn about the private certificate until you trust the HomeMesh CA "
-              "(see SECURITY.md → 'Trusting the local CA').")
+              "(see INSTALLATION.md → 'Trusting the HomeMesh certificate').")
     return 0
 
 
