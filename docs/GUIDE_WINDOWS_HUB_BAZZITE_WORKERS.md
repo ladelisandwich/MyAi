@@ -56,6 +56,25 @@ Run everything in a **normal** (not administrator) PowerShell window.
   Python 3.13 and 3.14 are both tested. **Close and reopen PowerShell** afterwards so the new commands
   are found.
 
+  **If the Node.js installer fails** (for example *exit code 1603*): Node is only needed once, to build
+  the web app, so use the official portable ZIP instead. It needs no installer and no admin rights.
+  Run this in the same PowerShell window you'll use for step 1.2:
+
+  ```powershell
+  $ProgressPreference = "SilentlyContinue"
+  $v = "v24.20.0"
+  $zip = "$env:TEMP\node-$v-win-x64.zip"
+  Invoke-WebRequest "https://nodejs.org/dist/$v/node-$v-win-x64.zip" -OutFile $zip -UseBasicParsing
+  Invoke-WebRequest "https://nodejs.org/dist/$v/SHASUMS256.txt" -OutFile "$env:TEMP\node-sums.txt" -UseBasicParsing
+  $expected = ((Select-String -Path "$env:TEMP\node-sums.txt" -Pattern "node-$v-win-x64.zip").Line -split '\s+')[0]
+  if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLower() -ne $expected) { throw "Checksum mismatch - do not use this file" }
+  Expand-Archive $zip -DestinationPath "$env:LOCALAPPDATA\Programs" -Force
+  $env:Path = "$env:LOCALAPPDATA\Programs\node-$v-win-x64;$env:Path"
+  node --version
+  ```
+
+  This puts Node on the PATH only for this window, which is all the installer needs.
+
 ### 1.2 Get HomeMesh and install it
 
 ```powershell

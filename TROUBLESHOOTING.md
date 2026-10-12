@@ -31,6 +31,11 @@ This is deliberate. Run `homemesh tls init` (sets `tls_mode = "self_signed"`), u
 `homemesh doctor` shows it. Another HomeMesh may already be running (`homemesh status`), or change
 `server.port`.
 
+**Windows: Node.js installer fails (exit code 1603)**
+Node is only needed once to build the web app. Use the portable ZIP from nodejs.org and check it
+against `SHASUMS256.txt`, as in the Windows hub guide (step 1.1). Then run the HomeMesh installer from
+the same PowerShell window.
+
 **Browser shows `web_ui_missing`: "The web interface has not been built"**
 The Python package has no `web_dist`. Build it with `scripts/build_web.sh` (Node.js 20.19+) and
 reinstall (`deploy/linux/install.sh --upgrade`), or use a release that includes it. The API and CLI
