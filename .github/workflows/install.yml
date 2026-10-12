@@ -26,9 +26,10 @@ jobs:
         include:
           - { python: "3.13", explicit: false }   # let install.ps1 find Python itself (py launcher / PATH)
           - { python: "3.14", explicit: true }    # pass -Python explicitly
-    env:
-      HOMEMESH_HOME: ${{ runner.temp }}\hm-win
     steps:
+      - name: Use a throw-away HomeMesh data folder
+        shell: powershell
+        run: Add-Content -Path $env:GITHUB_ENV -Value "HOMEMESH_HOME=$env:RUNNER_TEMP\hm-win"
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:

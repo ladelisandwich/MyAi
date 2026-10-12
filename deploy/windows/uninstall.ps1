@@ -20,8 +20,13 @@ $BinDir = Join-Path $Prefix "bin"
 $Exe = Join-Path $Prefix "venv\Scripts\homemesh.exe"
 
 if (Test-Path $Exe) {
-  & $Exe stop
-  & $Exe service uninstall
+  # Native calls with ErrorActionPreference=Continue: Windows PowerShell 5.1 would otherwise turn
+  # any stderr output into a terminating error when output is redirected.
+  $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+  & $Exe stop | Out-Host
+  if ($LASTEXITCODE) { $ErrorActionPreference = $prev; Write-Host "Could not stop HomeMesh; run 'homemesh stop --force' first." -ForegroundColor Red; exit 1 }
+  & $Exe service uninstall | Out-Host
+  $ErrorActionPreference = $prev
 }
 
 # Remove only our own entry from the user PATH, preserving everything else unexpanded.

@@ -41,14 +41,34 @@ $Exe = Join-Path $Venv "Scripts\homemesh.exe"
 function Say([string]$Message) { Write-Host $Message -ForegroundColor Cyan }
 function Fail([string]$Message) { Write-Host "Error: $Message" -ForegroundColor Red; exit 1 }
 
+# Run a native program and return its exit code. Windows PowerShell 5.1 turns a native program's
+# stderr into error records when output is redirected (logging, CI, run from another script), and
+# with ErrorActionPreference=Stop a harmless pip/npm warning would abort the install. We rely on
+# the exit code instead.
+function Invoke-Native([string]$File, [string[]]$Arguments, [switch]$Quiet) {
+  $prev = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    if ($Quiet) { & $File @Arguments *> $null } else { & $File @Arguments | Out-Host }
+    return $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $prev
+  }
+}
+
 # Python check: version >= 3.11, venv module and SQLite FTS5 (used for search).
 $Check = "import sys, venv, sqlite3; sqlite3.connect(':memory:').execute('create virtual table t using fts5(x)'); print(sys.executable); sys.exit(0 if sys.version_info >= (3, 11) else 3)"
 
 function Resolve-Python([string]$Cmd, [string[]]$Pre) {
+  $prev = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
   try {
     $out = & $Cmd @Pre -c $Check 2>$null
-    if ($LASTEXITCODE -eq 0 -and $out) { return ($out | Select-Object -Last 1).Trim() }
-  } catch { }
+    if ($LASTEXITCODE -eq 0 -and $out) { return ([string]($out | Select-Object -Last 1)).Trim() }
+  } catch {
+  } finally {
+    $ErrorActionPreference = $prev
+  }
   return $null
 }
 
@@ -61,7 +81,9 @@ if ($Python) {
   # The py launcher is preferred; a bare "python" may be the Microsoft Store stub, which the
   # check above detects because it does not run the code.
   if (Get-Command py -ErrorAction SilentlyContinue) {
-    foreach ($v in @("-3.13", "-3.12", "-3.11")) {
+    # "-3" is the newest installed 3.x (checked to be >= 3.11 above); the specific versions are a
+    # fallback for when the default is older. Only installed versions are tried this way.
+    foreach ($v in @("-3", "-3.14", "-3.13", "-3.12", "-3.11")) {
       $PyExe = Resolve-Python "py" @($v)
       if ($PyExe) { break }
     }
@@ -92,26 +114,27 @@ if ((Test-Path $Exe) -and -not $Upgrade) {
   if ((Test-Path $Exe) -and $Upgrade) {
     # Exit codes of 'homemesh status': 0 running, 2 running but degraded (e.g. Ollama down), 3 not running.
     # It must be stopped before upgrading: Windows locks the running python.exe and extension modules.
-    $prevPref = $ErrorActionPreference; $ErrorActionPreference = "Continue"
-    & $Exe status *> $null
-    $wasRunning = ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq 2)
-    $ErrorActionPreference = $prevPref
+    $code = Invoke-Native $Exe @("status") -Quiet
+    $wasRunning = ($code -eq 0 -or $code -eq 2)
     if ($wasRunning) {
       Say "Stopping HomeMesh for the upgrade..."
-      & $Exe stop
-      if ($LASTEXITCODE) { Fail "Could not stop HomeMesh; run 'homemesh stop --force' and try again." }
+      if (Invoke-Native $Exe @("stop")) { Fail "Could not stop HomeMesh; run 'homemesh stop --force' and try again." }
     }
   }
   Say "Installing into $Venv ..."
   New-Item -ItemType Directory -Force -Path $Prefix | Out-Null
-  & $PyExe -m venv $Venv
-  if ($LASTEXITCODE) { Fail "Could not create the virtual environment." }
+  if (Invoke-Native $PyExe @("-m", "venv", $Venv)) { Fail "Could not create the virtual environment." }
   $VPy = Join-Path $Venv "Scripts\python.exe"
-  & $VPy -m pip install --quiet --upgrade pip
-  if ($LASTEXITCODE) { Fail "pip upgrade failed (check your internet connection or proxy)." }
-  & $VPy -m pip install --quiet --upgrade $Root
-  if ($LASTEXITCODE) { Fail "Installing HomeMesh failed - see the pip output above." }
-  if ($wasRunning) { Say "Starting HomeMesh again (database migrations run automatically, with a backup first)..."; & $Exe start }
+  if (Invoke-Native $VPy @("-m", "pip", "install", "--quiet", "--disable-pip-version-check", "--upgrade", "pip")) {
+    Fail "pip upgrade failed (check your internet connection or proxy)."
+  }
+  if (Invoke-Native $VPy @("-m", "pip", "install", "--quiet", "--disable-pip-version-check", "--upgrade", $Root)) {
+    Fail "Installing HomeMesh failed - see the pip output above."
+  }
+  if ($wasRunning) {
+    Say "Starting HomeMesh again (database migrations run automatically, with a backup first)..."
+    [void](Invoke-Native $Exe @("start"))
+  }
 }
 
 # ---- Command shim + user PATH ----------------------------------------------------------------
@@ -140,10 +163,11 @@ if (-not $NoPath) {
 
 # ---- Optional automatic start ---------------------------------------------------------------
 if ($AutoStart) {
-  & $Exe service install
+  [void](Invoke-Native $Exe @("service", "install"))
 }
 
-Say ("Installed: " + (& $Exe version | Select-Object -First 1))
+Say "Installed:"
+if (Invoke-Native $Exe @("version")) { Fail "The installed 'homemesh' command does not run." }
 Write-Host @"
 
 Next steps (in a new terminal):
