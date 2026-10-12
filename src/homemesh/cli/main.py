@@ -432,7 +432,7 @@ def cmd_jobs(ctx: Ctx) -> int:
 
 def _passphrase(args: argparse.Namespace, confirm: bool) -> str | None:
     if getattr(args, "passphrase_stdin", False):
-        return sys.stdin.readline().rstrip("\n") or None
+        return sys.stdin.readline().rstrip("\r\n") or None
     if getattr(args, "encrypt", False):
         p = getpass.getpass("Backup passphrase: ")
         if confirm and getpass.getpass("Repeat passphrase: ") != p:
@@ -494,7 +494,7 @@ def cmd_user(ctx: Ctx) -> int:
 
     a = ctx.args
     if a.password_stdin:
-        password = sys.stdin.readline().rstrip("\n")
+        password = sys.stdin.readline().rstrip("\r\n")
     else:
         password = getpass.getpass("New password: ")
         if getpass.getpass("Repeat password: ") != password:

@@ -21,5 +21,5 @@ if [ "$PURGE" = 1 ]; then
   read -r -p "Type DELETE to confirm: " ans
   if [ "$ans" = "DELETE" ]; then rm -rf "$DATA_BASE" "$CONF"; echo "Data deleted."; else echo "Kept your data."; fi
 else
-  echo "Your data is kept in $DATA_BASE (delete it yourself or re-run with --purge-data)."
+  echo "Your data is kept in ${HOMEMESH_HOME:-$DATA_BASE} (delete it yourself or re-run with --purge-data)."
 fi

@@ -51,7 +51,7 @@ def ask_yes(prompt: str, default: bool = False, *, interactive: bool = True) -> 
 
 def read_password(args: argparse.Namespace, interactive: bool) -> str:
     if getattr(args, "password_stdin", False):
-        return sys.stdin.readline().rstrip("\n")
+        return sys.stdin.readline().rstrip("\r\n")
     if not interactive:
         raise ConfigError("A password is required: pass --password-stdin in non-interactive mode.")
     while True:
