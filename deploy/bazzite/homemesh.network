@@ -1,0 +1,4 @@
+# Podman Quadlet network shared by HomeMesh and Ollama (~/.config/containers/systemd/).
+[Network]
+NetworkName=homemesh
+Internal=false

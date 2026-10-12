@@ -88,3 +88,10 @@ def test_unknown_task_type_rejected():
 
     with pytest.raises(ValidationError):
         HomeMeshConfig.model_validate({"worker": {"task_types": ["chat", "shell"]}})
+
+
+def test_container_friendly_env_shortcuts(home):
+    cfg = load_config(home, environ={"HOMEMESH_OLLAMA_URL": "http://ollama:11434",
+                                     "HOMEMESH_TLS_SANS": "192.168.1.10, nas.local"})
+    assert [(b.type, b.url) for b in cfg.inference.backends] == [("ollama", "http://ollama:11434")]
+    assert cfg.server.tls_extra_sans == ["192.168.1.10", "nas.local"]

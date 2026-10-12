@@ -1,0 +1,31 @@
+# HomeMesh AI as a rootless Podman Quadlet user service (alternative to the native install).
+# Build the image first:  podman build -t localhost/homemesh:0.1.0 -f deploy/containers/Containerfile .
+# Copy this file, ollama.container and homemesh.network to ~/.config/containers/systemd/, then:
+#   systemctl --user daemon-reload && systemctl --user start homemesh
+[Unit]
+Description=HomeMesh AI
+Requires=ollama.service
+After=ollama.service
+
+[Container]
+ContainerName=homemesh
+Image=localhost/homemesh:0.1.0
+Network=homemesh.network
+Volume=%h/.local/share/homemesh-container:/data:Z
+Environment=HOMEMESH__SERVER__HOST=0.0.0.0
+Environment=HOMEMESH_OLLAMA_URL=http://ollama:11434
+# Local-only by default: the host publishes 127.0.0.1 only, so plain HTTP is acceptable here.
+Environment=HOMEMESH__SERVER__ALLOW_INSECURE_LAN=true
+PublishPort=127.0.0.1:8765:8765
+# For your home network instead (phones, other PCs, workers): enable TLS and publish on all interfaces:
+#   Environment=HOMEMESH__SERVER__TLS_MODE=self_signed
+#   Environment=HOMEMESH_TLS_SANS=192.168.1.10,bazzite.local      (this computer's LAN IP / name)
+#   Environment=HOMEMESH__SERVER__PUBLIC_URL=https://192.168.1.10:8765
+#   PublishPort=8765:8765
+# and remove ALLOW_INSECURE_LAN. Open the port for your LAN in the firewall if needed.
+
+[Service]
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

@@ -282,6 +282,22 @@ def cmd_worker(ctx: Ctx) -> int:
         print("Start the worker with 'homemesh start' (or 'homemesh run'). Authorise folders for document indexing "
               "with 'homemesh worker allow-path <folder>'.")
         return EXIT_OK
+    if a.action == "discover":
+        from homemesh.coordinator.discovery import discover
+
+        found = discover(ctx.cfg.server.discovery_port, a.timeout)
+        if not found:
+            print("No coordinator answered. Discovery must be enabled on the coordinator "
+                  "(server.discovery_enabled = true) and only works on the same network segment; "
+                  "otherwise join with the coordinator's address.")
+            return EXIT_USAGE
+        for f in found:
+            print(f"{f.get('name')}  {f['url']}  (HomeMesh {f.get('version')}, answered from {f['responder']})")
+            if f.get("tls_fingerprint"):
+                print(f"   fingerprint: {f['tls_fingerprint']}")
+        print("\nDiscovery answers are not authenticated: compare the fingerprint with the coordinator's "
+              "'Add a computer' dialog before joining.")
+        return EXIT_OK
     if a.action == "leave":
         from homemesh.worker.enroll import leave
 
@@ -640,6 +656,8 @@ def build_parser() -> argparse.ArgumentParser:
     j.add_argument("--system-trust", action="store_true")
     j.add_argument("--allow-insecure-http", action="store_true")
     wsub.add_parser("leave")
+    dsc = wsub.add_parser("discover", help="find coordinators on this network (if they enabled discovery)")
+    dsc.add_argument("--timeout", type=float, default=2.0)
     wsub.add_parser("status")
     ap = wsub.add_parser("allow-path")
     ap.add_argument("path")

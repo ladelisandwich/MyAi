@@ -1,0 +1,24 @@
+# Rootless Ollama with NVIDIA GPU via CDI, as a Podman Quadlet user service.
+# Copy to ~/.config/containers/systemd/ and run: systemctl --user daemon-reload && systemctl --user start ollama
+[Unit]
+Description=Ollama (local model server for HomeMesh)
+
+[Container]
+ContainerName=ollama
+Image=docker.io/ollama/ollama:0.40.3
+Network=homemesh.network
+# Only reachable from this computer (and the homemesh container). Never publish Ollama to the LAN.
+PublishPort=127.0.0.1:11434:11434
+Volume=%h/.local/share/ollama-container:/root/.ollama:Z
+# NVIDIA (Bazzite -nvidia images ship the NVIDIA container toolkit; check 'nvidia-ctk cdi list'):
+AddDevice=nvidia.com/gpu=all
+# AMD instead: use Image=docker.io/ollama/ollama:0.40.3-rocm and
+# AddDevice=/dev/kfd
+# AddDevice=/dev/dri
+SecurityLabelDisable=true
+
+[Service]
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

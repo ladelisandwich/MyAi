@@ -1,0 +1,29 @@
+# HomeMesh AI container image (works with Podman and Docker).
+#   podman build -t localhost/homemesh:0.1.0 -f deploy/containers/Containerfile .
+# Data lives in /data (mount a volume). The image contains no models; point it at an Ollama
+# container or host service (see compose.yaml / deploy/bazzite).
+
+# ---- stage 1: build the web UI -----------------------------------------------------------
+FROM docker.io/library/node:22-slim AS web
+WORKDIR /src/apps/web
+COPY apps/web/package.json apps/web/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY apps/web/ ./
+RUN npm run build
+
+# ---- stage 2: Python runtime ---------------------------------------------------------------
+FROM docker.io/library/python:3.13-slim AS runtime
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 \
+    HOMEMESH_HOME=/data HOMEMESH_IN_CONTAINER=1
+WORKDIR /opt/homemesh
+COPY pyproject.toml README.md ./
+COPY src/ ./src/
+COPY --from=web /src/apps/web/dist ./src/homemesh/web_dist
+RUN pip install --no-cache-dir . && useradd --create-home --uid 1000 homemesh && mkdir -p /data && chown homemesh /data
+USER homemesh
+VOLUME ["/data"]
+EXPOSE 8765
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8765/api/v1/system/health', timeout=4).status == 200 else 1)" || exit 1
+ENTRYPOINT ["homemesh"]
+CMD ["run"]

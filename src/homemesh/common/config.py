@@ -276,9 +276,15 @@ def _apply_env_overrides(data: dict[str, Any], environ: dict[str, str]) -> dict[
             if not isinstance(cursor, dict):
                 raise ConfigError(f"Environment override {key} conflicts with a non-table value")
         cursor[parts[-1]] = value
-    # Convenience switch used by tests and demos.
+    # Plain-text conveniences for containers/systemd, where JSON in environment values is awkward.
     if environ.get("HOMEMESH_MOCK", "").lower() in ("1", "true", "yes"):
         data.setdefault("inference", {})["mock_enabled"] = True
+    if environ.get("HOMEMESH_OLLAMA_URL"):
+        data.setdefault("inference", {})["backends"] = [
+            {"name": "ollama", "type": "ollama", "url": environ["HOMEMESH_OLLAMA_URL"].strip()}]
+    if environ.get("HOMEMESH_TLS_SANS"):
+        data.setdefault("server", {})["tls_extra_sans"] = [
+            s.strip() for s in environ["HOMEMESH_TLS_SANS"].split(",") if s.strip()]
     return data
 
 

@@ -66,6 +66,7 @@ class CoordinatorState:
         self._maintenance: asyncio.Task[None] | None = None
         self.ready = asyncio.Event()
         self.extra: dict[str, Any] = {}
+        self.discovery: Any = None
 
     async def start(self) -> None:
         self.paths.ensure()
@@ -83,9 +84,19 @@ class CoordinatorState:
 
             self.tls_fingerprint = ca_fingerprint(self.paths.tls_dir / "ca.pem")
         self._maintenance = asyncio.create_task(self._maintenance_loop(), name="maintenance")
+        if self.cfg.server.discovery_enabled:
+            from homemesh.coordinator.discovery import DiscoveryResponder
+            from homemesh.version import PROTOCOL_VERSION, __version__
+
+            self.discovery = DiscoveryResponder(self.cfg.server.discovery_port, {
+                "name": self.cfg.node.name, "url": self.cfg.advertised_url(), "version": __version__,
+                "protocol": PROTOCOL_VERSION, "tls_fingerprint": self.tls_fingerprint})
+            await self.discovery.start()
         self.ready.set()
 
     async def stop(self) -> None:
+        if self.discovery is not None:
+            self.discovery.stop()
         if self._maintenance:
             self._maintenance.cancel()
         await self.chat.shutdown()

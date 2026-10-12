@@ -1,0 +1,21 @@
+# Reference systemd *user* unit. 'homemesh service install' writes an equivalent unit with the
+# correct interpreter path to ~/.config/systemd/user/homemesh.service - you normally do not
+# need to copy this file by hand.
+[Unit]
+Description=HomeMesh AI (personal AI platform)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/share/homemesh/venv/bin/python -m homemesh run
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=%h/.local/share/homemesh %h/.config/homemesh
+
+[Install]
+WantedBy=default.target

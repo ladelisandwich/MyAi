@@ -1,0 +1,58 @@
+# HomeMesh AI + Ollama with Docker Compose (or podman-compose).
+#   docker compose -f deploy/containers/compose.yaml up -d --build
+#   docker compose -f deploy/containers/compose.yaml exec homemesh homemesh user create-owner --username owner
+#
+# Security notes
+# * Ollama has no authentication, so it is NOT published to the host or network: only the
+#   HomeMesh container can reach it, over the private 'internal' network.
+# * HomeMesh is published on 127.0.0.1 only. Inside the container it must listen on 0.0.0.0 for
+#   the port mapping to work, which is why allow_insecure_lan is set: the host-side binding keeps it
+#   local. To serve your LAN, switch to TLS (HOMEMESH__SERVER__TLS_MODE=self_signed) and publish
+#   "8765:8765" instead - see INSTALLATION.md.
+name: homemesh
+
+services:
+  ollama:
+    image: docker.io/ollama/ollama:0.40.3
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    networks: [internal]
+    # NVIDIA GPU (Docker with nvidia-container-toolkit). For Podman use:  devices: ["nvidia.com/gpu=all"]
+    # For AMD use image ollama/ollama:0.40.3-rocm and devices: ["/dev/kfd", "/dev/dri"].
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  homemesh:
+    build:
+      context: ../..
+      dockerfile: deploy/containers/Containerfile
+    image: localhost/homemesh:0.1.0
+    restart: unless-stopped
+    depends_on: [ollama]
+    environment:
+      HOMEMESH__SERVER__HOST: "0.0.0.0"
+      HOMEMESH__SERVER__ALLOW_INSECURE_LAN: "true"
+      HOMEMESH_OLLAMA_URL: "http://ollama:11434"
+      # For LAN access with TLS (then publish "8765:8765" and drop ALLOW_INSECURE_LAN):
+      # HOMEMESH__SERVER__TLS_MODE: "self_signed"
+      # HOMEMESH_TLS_SANS: "192.168.1.10,myserver.local"
+      # HOMEMESH__SERVER__PUBLIC_URL: "https://192.168.1.10:8765"
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - homemesh-data:/data
+    networks: [internal, default]
+
+networks:
+  internal:
+    internal: true
+
+volumes:
+  ollama-models:
+  homemesh-data:
