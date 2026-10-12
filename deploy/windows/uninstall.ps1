@@ -17,15 +17,15 @@ $ErrorActionPreference = "Stop"
 
 $Prefix = Join-Path $env:LOCALAPPDATA "Programs\HomeMesh"
 $BinDir = Join-Path $Prefix "bin"
-$Exe = Join-Path $Prefix "venv\Scripts\homemesh.exe"
+$VPy = Join-Path $Prefix "venv\Scripts\python.exe"   # run as "python -m homemesh" (signed launcher)
 
-if (Test-Path $Exe) {
+if (Test-Path $VPy) {
   # Native calls with ErrorActionPreference=Continue: Windows PowerShell 5.1 would otherwise turn
   # any stderr output into a terminating error when output is redirected.
   $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
-  & $Exe stop | Out-Host
+  & $VPy -m homemesh stop | Out-Host
   if ($LASTEXITCODE) { $ErrorActionPreference = $prev; Write-Host "Could not stop HomeMesh; run 'homemesh stop --force' first." -ForegroundColor Red; exit 1 }
-  & $Exe service uninstall | Out-Host
+  & $VPy -m homemesh service uninstall | Out-Host
   $ErrorActionPreference = $prev
 }
 

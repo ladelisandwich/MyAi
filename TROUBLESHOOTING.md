@@ -185,6 +185,13 @@ The passphrase is wrong or the file was modified. There is no recovery without t
 
 ## Windows specifics
 
+* **"An Application Control policy has blocked this file"** (or a program silently doesn't start):
+  Windows 11 **Smart App Control** blocks unsigned programs and libraries. HomeMesh runs through Python's
+  signed launcher (`python.exe -m homemesh`), but Python packages with compiled parts (numpy,
+  cryptography, pydantic) ship unsigned `.pyd` files that it may block. Check Windows Security → App &
+  browser control → Smart App Control. Turning it off is your decision: Windows doesn't let you turn it
+  back on without reinstalling. Microsoft Defender antivirus keeps running either way.
+
 * `homemesh stop` asks the process to stop via a stop-request file. If it doesn't stop within 30 s,
   `homemesh stop --force` terminates it (interrupted jobs are recorded on the next start).
 * If Windows Defender SmartScreen or the firewall prompts when the coordinator first listens on the

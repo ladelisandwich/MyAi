@@ -37,6 +37,10 @@ $Prefix = Join-Path $env:LOCALAPPDATA "Programs\HomeMesh"
 $Venv = Join-Path $Prefix "venv"
 $BinDir = Join-Path $Prefix "bin"
 $Exe = Join-Path $Venv "Scripts\homemesh.exe"
+# HomeMesh is always run as "python.exe -m homemesh": the venv's python.exe is Python's signed
+# launcher, whereas pip's generated homemesh.exe is unsigned and Windows 11 Smart App Control may
+# block unsigned programs.
+$VPy = Join-Path $Venv "Scripts\python.exe"
 
 function Say([string]$Message) { Write-Host $Message -ForegroundColor Cyan }
 function Fail([string]$Message) { Write-Host "Error: $Message" -ForegroundColor Red; exit 1 }
@@ -54,6 +58,10 @@ function Invoke-Native([string]$File, [string[]]$Arguments, [switch]$Quiet) {
   } finally {
     $ErrorActionPreference = $prev
   }
+}
+
+function Invoke-HomeMesh([string[]]$Arguments, [switch]$Quiet) {
+  return Invoke-Native $VPy (@("-m", "homemesh") + $Arguments) -Quiet:$Quiet
 }
 
 # Python check: version >= 3.11, venv module and SQLite FTS5 (used for search).
@@ -114,17 +122,16 @@ if ((Test-Path $Exe) -and -not $Upgrade) {
   if ((Test-Path $Exe) -and $Upgrade) {
     # Exit codes of 'homemesh status': 0 running, 2 running but degraded (e.g. Ollama down), 3 not running.
     # It must be stopped before upgrading: Windows locks the running python.exe and extension modules.
-    $code = Invoke-Native $Exe @("status") -Quiet
+    $code = Invoke-HomeMesh @("status") -Quiet
     $wasRunning = ($code -eq 0 -or $code -eq 2)
     if ($wasRunning) {
       Say "Stopping HomeMesh for the upgrade..."
-      if (Invoke-Native $Exe @("stop")) { Fail "Could not stop HomeMesh; run 'homemesh stop --force' and try again." }
+      if (Invoke-HomeMesh @("stop")) { Fail "Could not stop HomeMesh; run 'homemesh stop --force' and try again." }
     }
   }
   Say "Installing into $Venv ..."
   New-Item -ItemType Directory -Force -Path $Prefix | Out-Null
   if (Invoke-Native $PyExe @("-m", "venv", $Venv)) { Fail "Could not create the virtual environment." }
-  $VPy = Join-Path $Venv "Scripts\python.exe"
   if (Invoke-Native $VPy @("-m", "pip", "install", "--quiet", "--disable-pip-version-check", "--upgrade", "pip")) {
     Fail "pip upgrade failed (check your internet connection or proxy)."
   }
@@ -133,14 +140,14 @@ if ((Test-Path $Exe) -and -not $Upgrade) {
   }
   if ($wasRunning) {
     Say "Starting HomeMesh again (database migrations run automatically, with a backup first)..."
-    [void](Invoke-Native $Exe @("start"))
+    [void](Invoke-HomeMesh @("start"))
   }
 }
 
 # ---- Command shim + user PATH ----------------------------------------------------------------
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 $Shim = Join-Path $BinDir "homemesh.cmd"
-Set-Content -Path $Shim -Encoding ASCII -Value "@echo off`r`n`"%~dp0..\venv\Scripts\homemesh.exe`" %*`r`nexit /b %ERRORLEVEL%`r`n"
+Set-Content -Path $Shim -Encoding ASCII -Value "@echo off`r`n`"%~dp0..\venv\Scripts\python.exe`" -m homemesh %*`r`nexit /b %ERRORLEVEL%`r`n"
 
 if (-not $NoPath) {
   # Read the raw (unexpanded) user PATH from the registry so entries such as %USERPROFILE%\bin
@@ -163,11 +170,11 @@ if (-not $NoPath) {
 
 # ---- Optional automatic start ---------------------------------------------------------------
 if ($AutoStart) {
-  [void](Invoke-Native $Exe @("service", "install"))
+  [void](Invoke-HomeMesh @("service", "install"))
 }
 
 Say "Installed:"
-if (Invoke-Native $Exe @("version")) { Fail "The installed 'homemesh' command does not run." }
+if (Invoke-HomeMesh @("version")) { Fail "The installed 'homemesh' command does not run." }
 Write-Host @"
 
 Next steps (in a new terminal):

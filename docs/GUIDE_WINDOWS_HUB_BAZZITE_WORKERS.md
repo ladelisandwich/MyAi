@@ -71,6 +71,9 @@ Git opens a browser window to sign in to GitHub the first time. The installer:
 
 No administrator rights are needed. **Open a new PowerShell window** afterwards.
 
+If Windows reports *"An Application Control policy has blocked this file"*, Smart App Control is on
+and blocking an unsigned part of a Python package. See TROUBLESHOOTING.md → *Windows specifics*.
+
 ### 1.3 Set up the hub
 
 ```powershell

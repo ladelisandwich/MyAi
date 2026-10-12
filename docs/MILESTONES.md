@@ -14,21 +14,26 @@ validated, and what has **not** been verified yet. Re-run the procedures below a
 All work was done in a Linux container: 4 vCPU, 15 GB RAM, **no GPU**, no container daemon,
 no Windows machine, one host. Real inference used the official **Ollama 0.40.3 CPU build** with
 `smollm2:135m` (chat) and `all-minilm` (embeddings). CI runs on GitHub-hosted Ubuntu (Python 3.11,
-3.13) and **Windows** (Python 3.13) runners.
+3.13, 3.14) and **Windows** (Python 3.13, 3.14) runners. A second workflow (`install.yml`) runs the real
+installers: `install.ps1` under Windows PowerShell 5.1, `install.sh` and `install-ollama.sh` as a normal
+user inside the official `bazzite-nvidia-open` image (with a Quadlet dry-run using its Podman), and the
+container image build/run.
 
 Consequences:
 * GPU behaviour (VRAM detection, GPU placement, game-busy back-off) is verified with captured
   `nvidia-smi`/sysfs/CIM outputs and scheduler unit tests, **not on a real RTX 3080**.
 * Multi-node is verified with real processes and real TLS on **one host** (separate data folders and
   identities), not across physical machines on a LAN.
-* Windows: the Python test suite and a start → chat → stop lifecycle run on Windows in CI. The
-  PowerShell installer, the autostart entry and the CIM GPU query have **not** run on a real Windows PC.
-* Containers/Quadlets are written to the documented formats but **not built or run**.
+* Windows: the test suite, the PowerShell installer (install, autostart entry, setup, start, web UI,
+  chat, upgrade while running, stop, uninstall) run on GitHub's Windows Server runners. Not yet on a
+  Windows 11 desktop: the firewall prompt, Smart App Control, the CIM GPU query with real AMD/NVIDIA cards.
+* Containers: the image builds and runs (health, non-root, UI, chat via API) in CI. The NVIDIA compose
+  overlay and the Quadlets with a real GPU have not been run.
 
 ## Validation commands
 
 ```bash
-ruff check . && pytest -q                       # unit + integration (mock backend, real sockets): 167 tests
+ruff check . && pytest -q                       # unit + integration (mock backend, real sockets): 170 tests
 pytest -m smoke                                 # real Ollama (see tests/smoke/test_real_ollama.py)
 cd apps/web && npm run typecheck && npm test && npm run build
 python scripts/bench.py --runs 5 --model <model>     # against a running coordinator
@@ -102,8 +107,8 @@ python scripts/bench.py --runs 5 --model <model>     # against a running coordin
 | CLI: status/doctor/stop work on every OS, including redirected output on Windows | ✅ auto | CI lifecycle step; `test_stop_request_file_triggers_graceful_stop`, `test_cli_output_survives_legacy_console_encoding`, `test_worker_link_reports_protocol_mismatch` |
 | Linux user install + systemd user service | ✅ real (install) · ⚠️ systemd unit not run (no systemd in the container) | Procedure V3 |
 | Bazzite native and Quadlet with NVIDIA CDI | ⚠️ unverified | Procedure V4 (deploy/bazzite/README.md) |
-| Windows installer and autostart entry | ⚠️ unverified (scripts reviewed, not executed) | Procedure V5 |
-| Container image and compose stack | ⚠️ unverified (not built) | Procedure V6 |
+| Windows installer and autostart entry | ✅ auto (Windows Server CI, PowerShell 5.1, Python 3.13 + 3.14) · ⚠️ not yet on a Windows 11 desktop | `install.yml` job *Windows installer*; Procedure V5 |
+| Container image | ✅ auto (build, run, health, non-root, UI, chat) · ⚠️ GPU overlay not run | `install.yml` job *Container image*; Procedure V6 |
 | Package layering rules | ✅ auto | `test_layering`, `test_os_specific_code_isolated` |
 
 ## Not implemented (designed)
