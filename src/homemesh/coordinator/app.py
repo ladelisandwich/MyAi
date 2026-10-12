@@ -18,6 +18,7 @@ from homemesh.common.paths import AppPaths
 from homemesh.coordinator.api import (
     attachments,
     auth,
+    backups,
     conversations,
     events,
     jobs,
@@ -99,7 +100,7 @@ def create_app(cfg: HomeMeshConfig, paths: AppPaths, *, state: CoordinatorState 
                             status_code=500)
 
     for r in (auth, system, nodes, models, conversations, memory, knowledge, jobs, tools, settings, events,
-              attachments):
+              attachments, backups):
         app.include_router(r.router)
     app.include_router(worker_ws.router)
 
