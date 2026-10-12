@@ -63,7 +63,7 @@ export interface Message {
   mock?: boolean;
   metrics_json?: Metrics | null;
   sources_json?: Source[] | null;
-  context_json?: { memories?: { id: string; content: string; source: string }[]; notes?: string[]; tools_offered?: string[]; history_dropped?: number; num_ctx?: number } | null;
+  context_json?: { memories?: { id: string; content: string; source: string }[]; notes?: string[]; tools_offered?: string[]; history_dropped?: number; num_ctx?: number; memory_saved?: { memory_id: string; content: string; outcome: string } } | null;
   tool_calls_json?: ToolLogEntry[] | null;
   attachments_json?: { id: string; filename: string; mime: string; kind: string; size: number }[] | null;
   error_code?: string | null;

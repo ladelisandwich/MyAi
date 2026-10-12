@@ -124,6 +124,7 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.88em; }
 /* ------------------------------------------------------------------ primitives */
 .card { background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); }
 .card + .card { margin-top: 14px; }
+.grid > .card + .card, .grid > .card { margin-top: 0; }
 .card h2 { display: flex; align-items: center; gap: 8px; }
 .card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
 .card-head h2, .card-head h3 { margin: 0; }
@@ -334,4 +335,4 @@ pre.block { background: var(--code-bg); border: 1px solid var(--border); border-
 .progress-line .meter { flex: 1; }
 
 .only-mobile { display: none; }
-@media (max-width: 860px) { .only-mobile { display: inline-flex; } }
+@media (max-width: 860px) { .only-mobile { display: inline-flex; } .desktop-only { display: none; } }

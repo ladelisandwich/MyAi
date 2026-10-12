@@ -125,7 +125,7 @@ function NodeCard({ n, reload }: { n: NodeSummary; reload: () => void }) {
           {(hw?.gpus ?? []).length === 0 ? <div className="small muted">No GPU detected - CPU inference, embeddings and indexing still work.</div>
             : hw!.gpus.map((g) => <GpuView key={g.index} g={g} live={t?.gpus?.find((x) => x.index === g.index)} />)}
           {t?.external_gpu_busy && <div className="alert warn small">Another application is using the GPU heavily; this computer is backing off according to its mode.</div>}
-          {(hw?.warnings ?? []).map((w) => <div key={w} className="faint tiny">⚠ {w}</div>)}
+          {(hw?.warnings ?? []).filter((w) => !w.startsWith("No GPU detected")).map((w) => <div key={w} className="faint tiny">⚠ {w}</div>)}
         </div>
       </div>
       <div>

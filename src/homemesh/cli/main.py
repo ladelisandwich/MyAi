@@ -270,8 +270,11 @@ def cmd_worker(ctx: Ctx) -> int:
         name = a.name or cfg.node.name
         creds = join(a.coordinator, a.code, ctx.paths, node_name=name, fingerprint=a.fingerprint,
                      system_trust=a.system_trust, allow_insecure_http=a.allow_insecure_http)
-        if "worker" not in cfg.node.roles:
-            cfg.node.roles = ["worker"] if not cfg.has_role("coordinator") else [*cfg.node.roles, "worker"]
+        if cfg.has_role("coordinator") and ctx.paths.config_file.exists():
+            print("Note: this computer was configured as a coordinator. After joining another coordinator it runs "
+                  "as a worker only; its local coordinator data is kept but no longer started.")
+        # A computer that joins a coordinator contributes as a worker; it must not start its own coordinator.
+        cfg.node.roles = ["worker"]
         cfg.worker.coordinator_url = creds.coordinator_url
         cfg.node.name = name
         save_config(cfg, ctx.paths.config_file)

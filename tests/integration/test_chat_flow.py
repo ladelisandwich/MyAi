@@ -80,6 +80,8 @@ async def test_explicit_memory_is_saved_and_used_across_conversations(h):
     assert saved["outcome"] == "created" and saved["content"] == "My home server is called Atlas"
     mems = (await c.get("/api/v1/memories")).json()["items"]
     assert mems[0]["source"] == "user_explicit" and mems[0]["status"] == "active"
+    stored = (await c.get(f"/api/v1/conversations/{conv['id']}")).json()["messages"][-1]
+    assert stored["context_json"]["memory_saved"]["content"] == "My home server is called Atlas"
     again = await _send(c, conv["id"], "remember that my home server is called Atlas!")
     assert dict(again)["memory_saved"]["outcome"] == "duplicate"
     # A brand-new conversation (as if from another device) retrieves it.

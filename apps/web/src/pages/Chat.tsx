@@ -110,6 +110,9 @@ function AssistantMessage({ m, isLast, onRegenerate, onApprove }: {
   const notes = live?.notes ?? m.context_json?.notes ?? [];
   return (
     <div className="msg assistant">
+      {!live && m.context_json?.memory_saved && (
+        <div className="notice">📌 {m.context_json.memory_saved.outcome === "created" ? "Saved to memory" : "Already in memory"}: “{m.context_json.memory_saved.content}” <a href="#/memory">manage</a></div>
+      )}
       {live?.notices.map((n, i) => <div key={i} className="notice">{n}</div>)}
       {tools.map((t, i) => (
         <div key={i} className="tool">
@@ -486,7 +489,7 @@ function ChatView({ convId, openList }: { convId: string; openList: () => void }
   return (
     <div className="chat-main">
       <div className="chat-head">
-        <button className="btn ghost sm icon-only only-mobile" aria-label="Conversations" onClick={openList}>☰</button>
+        <button className="btn sm only-mobile" aria-label="Show conversations" onClick={openList}>💬 Chats</button>
         {editingTitle ? (
           <input autoFocus defaultValue={conv?.title} style={{ flex: 1, minWidth: 120 }} aria-label="Conversation title"
             onBlur={(e) => { setEditingTitle(false); if (e.target.value.trim() && e.target.value !== conv?.title) void updateConv({ title: e.target.value.trim() }); }}
@@ -548,7 +551,7 @@ function ChatView({ convId, openList }: { convId: string; openList: () => void }
             <button className="btn icon-only" title="Attach an image" aria-label="Attach an image" onClick={() => fileRef.current?.click()} disabled={busy}>📎</button>
             <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onChange={(e) => void upload(e.target.files)} />
             <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={onKey} rows={1}
-              placeholder="Message your assistant… (Enter to send, Shift+Enter for a new line)" aria-label="Message" />
+              placeholder="Message your assistant…" aria-label="Message" />
             {busy ? <button className="btn danger" onClick={() => void stop()}>■ Stop</button>
               : <button className="btn primary" onClick={() => void send()} disabled={!input.trim() && attachments.length === 0}>Send</button>}
           </div>
@@ -557,7 +560,7 @@ function ChatView({ convId, openList }: { convId: string; openList: () => void }
             <label className="check"><input type="checkbox" checked={useKnowledge} onChange={(e) => setUseKnowledge(e.target.checked)} />Search my documents</label>
             <label className="check"><input type="checkbox" checked={useTools} onChange={(e) => setUseTools(e.target.checked)} />Allow tools</label>
             <span className="spacer" />
-            <span className="faint">Say “remember that …” to save a memory.</span>
+            <span className="faint desktop-only">Enter to send · Shift+Enter for a new line · say “remember that …” to save a memory</span>
           </div>
         </div>
       </div>

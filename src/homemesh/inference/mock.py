@@ -117,7 +117,7 @@ class MockBackend(InferenceBackend):
                                 metrics=GenerationMetrics(total_ms=round((time.perf_counter() - t0) * 1000, 2)),
                                 model=payload.model)
                 return
-            has_system_context = any(m.role == "system" and "[S1]" in m.content for m in payload.messages)
+            has_system_context = any(m.role == "system" and '<document id="S1"' in m.content for m in payload.messages)
             reply = f"{MOCK_PREFIX} This is a canned response from the mock backend (no AI model ran). "
             reply += f"You said: {text_in.strip()[:200]}"
             if has_system_context:

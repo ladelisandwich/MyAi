@@ -238,7 +238,10 @@ class ChatService:
                     run.user_id, explicit_memory, source="user_explicit", project_id=conv.get("project_id"),
                     conversation_id=run.conversation_id, message_id=run.user_message_id,
                     retention_days=settings["memory"]["default_retention_days"])
-                run.emit("memory_saved", {"memory_id": mem["id"], "content": mem["content"], "outcome": outcome})
+                saved = {"memory_id": mem["id"], "content": mem["content"], "outcome": outcome}
+                run.emit("memory_saved", saved)
+                # Persist with the reply so every device (and later reloads) shows what was saved.
+                final["context_json"] = {"memory_saved": saved}
             images = await self._image_payloads(attachments)
             conv_settings = conv.get("settings_json") or {}
             model_override = req.model or conv_settings.get("model")
@@ -287,7 +290,7 @@ class ChatService:
                                max_output_tokens=max_out, tools_available=bool(offered))
             except ContextTooLarge as exc:
                 raise ValidationFailed(str(exc), code="context_too_large") from exc
-            context_summary = ctx.summary()
+            context_summary = {**(final.get("context_json") or {}), **ctx.summary()}
             context_summary["memories"] = [{"id": m["id"], "content": m["content"], "source": m["source"]}
                                            for m in memories if m["id"] in ctx.memory_ids]
             context_summary["tools_offered"] = [t.name for t in offered]

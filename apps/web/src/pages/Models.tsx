@@ -123,7 +123,7 @@ export default function ModelsPage() {
               {data.backends.map((b) => (
                 <tr key={`${b.node_id}/${b.name}`}>
                   <td>{b.node_name}</td>
-                  <td>{b.name} <span className="faint small">({b.type}{b.version ? ` ${b.version}` : ""})</span> {b.mock && <MockBadge />}</td>
+                  <td>{b.name} <span className="faint small">({b.type}{b.version && b.version !== b.type ? ` ${b.version}` : ""})</span> {b.mock && <MockBadge />}</td>
                   <td>{!b.online ? <Badge>offline</Badge> : b.ok ? <Badge kind="ok">ok</Badge> : <span><Badge kind="danger">unreachable</Badge><div className="faint tiny">{b.error}</div></span>}</td>
                 </tr>
               ))}
