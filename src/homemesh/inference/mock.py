@@ -65,10 +65,12 @@ class MockBackend(InferenceBackend):
     supports_load_unload = True
     supports_embeddings = True
 
-    def __init__(self, name: str = "mock", token_delay_s: float | None = None) -> None:
+    def __init__(self, name: str = "mock", token_delay_s: float | None = None,
+                 models: dict[str, list[str]] | None = None) -> None:
         super().__init__(name, "mock://")
         env_delay = os.environ.get("HOMEMESH_MOCK_DELAY")
         self.token_delay_s = token_delay_s if token_delay_s is not None else float(env_delay or 0.01)
+        self.models: dict[str, list[str]] = dict(models) if models is not None else dict(MOCK_MODELS)
         self.loaded: set[str] = set()
         self.extra_models: dict[str, list[str]] = {}
 
@@ -77,7 +79,7 @@ class MockBackend(InferenceBackend):
 
     async def list_models(self) -> list[ModelInfo]:
         out = []
-        for name, caps in {**MOCK_MODELS, **self.extra_models}.items():
+        for name, caps in {**self.models, **self.extra_models}.items():
             out.append(ModelInfo(
                 name=name, backend=self.name, backend_type=self.type, size_bytes=10 * 1024 * 1024,
                 family="mock", parameter_size="0B", context_length=4096,
@@ -89,7 +91,7 @@ class MockBackend(InferenceBackend):
         return out
 
     async def chat(self, payload: ChatJobPayload) -> AsyncIterator[ChatChunk]:  # type: ignore[override]
-        if payload.model not in MOCK_MODELS and payload.model not in self.extra_models:
+        if payload.model not in self.models and payload.model not in self.extra_models:
             raise BackendError(f"Model {payload.model!r} is not installed in the mock backend.",
                                code="model_not_found", status_code=404)
         t0 = time.perf_counter()
@@ -142,7 +144,7 @@ class MockBackend(InferenceBackend):
         ))
 
     async def embed(self, model: str, inputs: list[str]) -> EmbedResult:
-        if model != "mock-embed" and CAP_EMBEDDING not in self.extra_models.get(model, []):
+        if CAP_EMBEDDING not in {**self.models, **self.extra_models}.get(model, []):
             raise BackendError(f"Model {model!r} does not support embeddings.", code="model_incompatible")
         return EmbedResult(embeddings=[mock_embedding(t) for t in inputs], model=model)
 
