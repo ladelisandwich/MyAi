@@ -107,14 +107,14 @@ def cmd_start(ctx: Ctx) -> int:
 def cmd_stop(ctx: Ctx) -> int:
     from homemesh.cli import service
 
-    print(service.stop(ctx.paths))
+    print(service.stop(ctx.paths, force=ctx.args.force))
     return EXIT_OK
 
 
 def cmd_restart(ctx: Ctx) -> int:
     from homemesh.cli import service
 
-    print(service.stop(ctx.paths))
+    print(service.stop(ctx.paths, force=ctx.args.force))
     time.sleep(1)
     print(service.start(ctx.paths))
     return EXIT_OK
@@ -614,7 +614,10 @@ def build_parser() -> argparse.ArgumentParser:
     r.set_defaults(func=cmd_run)
     for name, fn, help_ in (("start", cmd_start, "start in the background (service if installed)"),
                             ("stop", cmd_stop, "stop HomeMesh"), ("restart", cmd_restart, "restart HomeMesh")):
-        sub.add_parser(name, help=help_).set_defaults(func=fn)
+        sp = sub.add_parser(name, help=help_)
+        if name != "start":
+            sp.add_argument("--force", action="store_true", help="terminate forcibly if a clean stop takes over 30s")
+        sp.set_defaults(func=fn)
     sub.add_parser("status", help="show whether HomeMesh is running and healthy").set_defaults(func=cmd_status)
     sub.add_parser("doctor", help="diagnose installation, GPU, backends, network and database").set_defaults(func=cmd_doctor)
     lg = sub.add_parser("logs", help="show the log file")

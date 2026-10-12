@@ -40,6 +40,21 @@ def _ssl_kwargs(cfg: HomeMeshConfig, paths: AppPaths) -> dict[str, str]:
     return {}
 
 
+async def _watch_stop_request(paths: AppPaths, stop: asyncio.Event, interval_s: float = 0.5) -> None:
+    """Set ``stop`` when ``homemesh stop`` drops a stop-request file into the data directory."""
+    request = paths.stop_request_file
+    with contextlib.suppress(OSError):
+        request.unlink()  # stale request from an earlier run
+    while not stop.is_set():
+        if request.exists():
+            with contextlib.suppress(OSError):
+                request.unlink()
+            log.info("Stop requested by 'homemesh stop'")
+            stop.set()
+            return
+        await asyncio.sleep(interval_s)
+
+
 async def run_roles(cfg: HomeMeshConfig, paths: AppPaths, roles: list[str] | None = None,
                     *, install_signal_handlers: bool = True, stop_event: asyncio.Event | None = None) -> int:
     roles = roles or list(cfg.node.roles)
@@ -114,6 +129,7 @@ async def run_roles(cfg: HomeMeshConfig, paths: AppPaths, roles: list[str] | Non
         if sys.platform == "win32":
             signal.signal(signal.SIGINT, lambda *_: loop.call_soon_threadsafe(stop.set))
 
+    watcher = asyncio.create_task(_watch_stop_request(paths, stop), name="stop-request-watch")
     stopper = asyncio.create_task(stop.wait(), name="stop-wait")
     done, _ = await asyncio.wait([*tasks, stopper], return_when=asyncio.FIRST_COMPLETED)
     exit_code = 0
@@ -132,6 +148,7 @@ async def run_roles(cfg: HomeMeshConfig, paths: AppPaths, roles: list[str] | Non
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await asyncio.wait_for(t, timeout=15)
     stopper.cancel()
+    watcher.cancel()
     with contextlib.suppress(OSError):
         paths.pid_file.unlink()
     return exit_code

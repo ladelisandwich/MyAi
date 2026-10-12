@@ -1,5 +1,6 @@
 # HomeMesh AI + Ollama with Docker Compose (or podman-compose).
 #   docker compose -f deploy/containers/compose.yaml up -d --build
+#   (NVIDIA GPU: add  -f deploy/containers/compose.nvidia.yaml  to both commands)
 #   docker compose -f deploy/containers/compose.yaml exec homemesh homemesh user create-owner --username owner
 #
 # Security notes
@@ -18,15 +19,8 @@ services:
     volumes:
       - ollama-models:/root/.ollama
     networks: [internal]
-    # NVIDIA GPU (Docker with nvidia-container-toolkit). For Podman use:  devices: ["nvidia.com/gpu=all"]
-    # For AMD use image ollama/ollama:0.40.3-rocm and devices: ["/dev/kfd", "/dev/dri"].
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    # CPU only here. NVIDIA: use the compose.nvidia.yaml overlay. AMD: use image
+    # ollama/ollama:0.40.3-rocm with devices: ["/dev/kfd", "/dev/dri"].
 
   homemesh:
     build:

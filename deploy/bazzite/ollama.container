@@ -15,9 +15,12 @@ AddDevice=nvidia.com/gpu=all
 # AMD instead: use Image=docker.io/ollama/ollama:0.40.3-rocm and
 # AddDevice=/dev/kfd
 # AddDevice=/dev/dri
+# GPU containers on SELinux hosts (Fedora/Bazzite) usually need SELinux labelling turned off for
+# THIS container only (it does not change the system's SELinux mode). Try without it first.
 SecurityLabelDisable=true
 
 [Service]
+ExecStartPre=/usr/bin/mkdir -p %h/.local/share/ollama-container
 Restart=on-failure
 
 [Install]

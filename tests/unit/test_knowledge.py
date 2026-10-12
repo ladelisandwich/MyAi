@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 
+from fsutil import symlink_or_skip
 from homemesh.knowledge.chunking import chunk_text
 from homemesh.knowledge.extract import extract
 from homemesh.knowledge.pathsafety import PathPolicy
@@ -70,7 +71,7 @@ async def test_scanner_incremental_and_safe(tmp_path):
     (root / ".hidden").mkdir()
     (root / ".hidden" / "c.md").write_text("hidden")
     (root / "photo.jpg").write_bytes(b"\xff\xd8\xff")
-    os.symlink(tmp_path, root / "escape")
+    symlink_or_skip(tmp_path, root / "escape")
     files = [rel for _, rel in iter_files(root, ["node_modules"], [])]
     assert sorted(files) == ["a.md", "sub/b.txt"]
 

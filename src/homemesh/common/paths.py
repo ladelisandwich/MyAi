@@ -72,6 +72,12 @@ class AppPaths:
         return self.data_dir / "homemesh.pid"
 
     @property
+    def stop_request_file(self) -> Path:
+        """Created by ``homemesh stop``; the running process watches for it (works on every OS,
+        including Windows where a windowless process cannot receive a console signal)."""
+        return self.data_dir / "homemesh.stop-request"
+
+    @property
     def workspace_dir(self) -> Path:
         """Default workspace where the assistant may create files (with approval)."""
         return self.data_dir / "workspace"

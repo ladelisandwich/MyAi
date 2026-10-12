@@ -1,10 +1,12 @@
-"""Service management: systemd user units (Linux/Bazzite), a per-user logon task (Windows),
-and a portable background-process fallback.
+r"""Service management: systemd user units (Linux/Bazzite), a per-user autostart entry
+(Windows), and a portable background-process fallback.
 
 Nothing here requires administrator rights. On Linux the unit lives in
 ``~/.config/systemd/user/homemesh.service``; to keep it running while logged out, the owner
 can run ``loginctl enable-linger $USER`` (printed as a hint, never executed automatically).
-On Windows a Scheduled Task named "HomeMesh" starts ``pythonw -m homemesh run`` at logon.
+On Windows a value named "HomeMesh" under ``HKCU\Software\Microsoft\Windows\CurrentVersion\Run``
+starts ``pythonw -m homemesh run`` when the user logs in. (A Scheduled Task with a logon
+trigger usually needs administrator rights, so it is not used.)
 """
 
 from __future__ import annotations
@@ -20,7 +22,8 @@ from pathlib import Path
 from homemesh.common.paths import AppPaths
 
 UNIT_NAME = "homemesh.service"
-TASK_NAME = "HomeMesh"
+AUTOSTART_NAME = "HomeMesh"
+WIN_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
 def _python_for_service() -> str:
@@ -30,6 +33,24 @@ def _python_for_service() -> str:
         if pyw.exists():
             return str(pyw)
     return str(exe)
+
+
+def _win_autostart(enable: bool | None) -> bool:
+    """Query (``None``), add (``True``) or remove (``False``) the per-user Run entry."""
+    import winreg  # Windows only
+
+    access = winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE
+    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, WIN_RUN_KEY, 0, access) as key:
+        if enable:
+            winreg.SetValueEx(key, AUTOSTART_NAME, 0, winreg.REG_SZ, f'"{_python_for_service()}" -m homemesh run')
+            return True
+        try:
+            winreg.QueryValueEx(key, AUTOSTART_NAME)
+        except FileNotFoundError:
+            return False
+        if enable is False:
+            winreg.DeleteValue(key, AUTOSTART_NAME)
+        return True
 
 
 def systemd_available() -> bool:
@@ -86,12 +107,14 @@ def install_service(paths: AppPaths) -> str:
         return (f"Installed {p} and enabled it at login. Start now with 'homemesh start'.\n"
                 f"To keep HomeMesh running when you are logged out, run once: loginctl enable-linger {os.environ.get('USER', '$USER')}")
     if sys.platform == "win32":
-        cmd = f'"{_python_for_service()}" -m homemesh run'
-        r = subprocess.run(["schtasks", "/Create", "/TN", TASK_NAME, "/SC", "ONLOGON", "/RL", "LIMITED", "/TR", cmd, "/F"],
-                           capture_output=True, text=True, check=False)
-        if r.returncode != 0:
-            return f"Could not create the scheduled task: {r.stderr or r.stdout}"
-        return "Created the 'HomeMesh' scheduled task (starts at logon, no admin rights needed)."
+        try:
+            _win_autostart(True)
+        except OSError as exc:
+            return f"Could not add the autostart entry: {exc}"
+        extra = ("\nNote: HOMEMESH_HOME is set only in this terminal; set it as a user environment variable "
+                 "so the autostarted process uses the same data.") if os.environ.get("HOMEMESH_HOME") else ""
+        return ("HomeMesh will start in the background when you log in (per-user autostart entry, no admin rights "
+                "needed). Start it now with 'homemesh start'." + extra)
     return "Automatic start is not implemented for this OS yet; use 'homemesh start'."
 
 
@@ -107,8 +130,11 @@ def uninstall_service() -> str:
             return f"Removed {p}. Your data was not touched."
         return "No systemd unit was installed."
     if sys.platform == "win32":
-        subprocess.run(["schtasks", "/Delete", "/TN", TASK_NAME, "/F"], capture_output=True, check=False)
-        return "Removed the 'HomeMesh' scheduled task. Your data was not touched."
+        try:
+            removed = _win_autostart(False)
+        except OSError as exc:
+            return f"Could not remove the autostart entry: {exc}"
+        return "Removed the autostart entry. Your data was not touched." if removed else "No autostart entry was installed."
     return "Nothing to uninstall."
 
 
@@ -116,8 +142,10 @@ def service_installed() -> bool:
     if sys.platform.startswith("linux"):
         return unit_path().exists()
     if sys.platform == "win32":
-        r = subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME], capture_output=True, text=True, check=False)
-        return r.returncode == 0
+        try:
+            return _win_autostart(None)
+        except OSError:
+            return False
     return False
 
 
@@ -144,9 +172,6 @@ def start(paths: AppPaths) -> str:
     if sys.platform.startswith("linux") and unit_path().exists() and systemd_available():
         r = subprocess.run(["systemctl", "--user", "start", UNIT_NAME], capture_output=True, text=True, check=False)
         return "Started via systemd." if r.returncode == 0 else f"systemctl failed: {r.stderr.strip()}"
-    if sys.platform == "win32" and service_installed():
-        subprocess.run(["schtasks", "/Run", "/TN", TASK_NAME], capture_output=True, check=False)
-        return "Started the HomeMesh scheduled task."
     # Portable fallback: detached background process logging to the data directory.
     paths.logs_dir.mkdir(parents=True, exist_ok=True)
     log = open(paths.logs_dir / "background.log", "ab")
@@ -163,7 +188,7 @@ def start(paths: AppPaths) -> str:
     return f"Started; it is taking a while to come up - check {paths.logs_dir / 'background.log'}."
 
 
-def stop(paths: AppPaths, timeout: float = 30.0) -> str:
+def stop(paths: AppPaths, timeout: float = 30.0, *, force: bool = False) -> str:
     if sys.platform.startswith("linux") and unit_path().exists() and systemd_available():
         r = subprocess.run(["systemctl", "--user", "is-active", UNIT_NAME], capture_output=True, text=True, check=False)
         if r.stdout.strip() == "active":
@@ -172,13 +197,21 @@ def stop(paths: AppPaths, timeout: float = 30.0) -> str:
     pid = read_pid(paths)
     if not pid:
         return "HomeMesh is not running."
-    if sys.platform == "win32":
-        subprocess.run(["taskkill", "/PID", str(pid)], capture_output=True, check=False)
-    else:
+    # Graceful on every OS: the process watches for this file and shuts down cleanly (running
+    # jobs are cancelled and recorded). On POSIX we also send SIGTERM, which does the same.
+    paths.stop_request_file.write_text(str(pid), encoding="utf-8")
+    if sys.platform != "win32":
         os.kill(pid, signal.SIGTERM)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if not pid_alive(pid):
             return "Stopped."
         time.sleep(0.3)
-    return f"Process {pid} did not exit within {timeout:.0f}s."
+    if force:
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, check=False)
+        else:
+            os.kill(pid, signal.SIGKILL)
+        return (f"Process {pid} did not stop within {timeout:.0f}s and was terminated forcibly. "
+                "Interrupted jobs are marked as such on the next start.")
+    return f"Process {pid} did not exit within {timeout:.0f}s. Use 'homemesh stop --force' to terminate it."

@@ -1,7 +1,7 @@
-import os
 
 import pytest
 
+from fsutil import symlink_or_skip
 from homemesh.common.security import (
     fingerprint_sha256,
     generate_pairing_code,
@@ -62,6 +62,7 @@ def test_refuses_disk_root_and_home(tmp_path, monkeypatch):
     with pytest.raises(PermissionError, match="entire filesystem"):
         validate_new_root(type(tmp_path)("/"))
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Path.home() on Windows
     with pytest.raises(PermissionError, match="home folder"):
         validate_new_root(tmp_path)
     (tmp_path / "Notes").mkdir()
@@ -74,7 +75,7 @@ def test_traversal_and_symlink_escape_blocked(tmp_path):
     (root / "ok.txt").write_text("fine")
     secret = tmp_path / "secret.txt"
     secret.write_text("nope")
-    os.symlink(secret, root / "link.txt")
+    symlink_or_skip(secret, root / "link.txt")
     pol = PathPolicy([root])
     assert pol.resolve(root / "ok.txt").name == "ok.txt"
     with pytest.raises(PermissionError):

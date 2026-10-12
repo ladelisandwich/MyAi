@@ -12,11 +12,16 @@ ContainerName=homemesh
 Image=localhost/homemesh:0.1.0
 Network=homemesh.network
 Volume=%h/.local/share/homemesh-container:/data:Z
+# The image runs as uid 1000; map your own user to it so the data folder stays yours on the host.
+UserNS=keep-id:uid=1000,gid=1000
 Environment=HOMEMESH__SERVER__HOST=0.0.0.0
 Environment=HOMEMESH_OLLAMA_URL=http://ollama:11434
 # Local-only by default: the host publishes 127.0.0.1 only, so plain HTTP is acceptable here.
 Environment=HOMEMESH__SERVER__ALLOW_INSECURE_LAN=true
 PublishPort=127.0.0.1:8765:8765
+# Optional (NVIDIA): lets HomeMesh read real VRAM/utilisation via nvidia-smi, which CDI injects.
+# Without it HomeMesh cannot see the GPU from inside the container and schedules on RAM only.
+# AddDevice=nvidia.com/gpu=all
 # For your home network instead (phones, other PCs, workers): enable TLS and publish on all interfaces:
 #   Environment=HOMEMESH__SERVER__TLS_MODE=self_signed
 #   Environment=HOMEMESH_TLS_SANS=192.168.1.10,bazzite.local      (this computer's LAN IP / name)
@@ -25,6 +30,7 @@ PublishPort=127.0.0.1:8765:8765
 # and remove ALLOW_INSECURE_LAN. Open the port for your LAN in the firewall if needed.
 
 [Service]
+ExecStartPre=/usr/bin/mkdir -p %h/.local/share/homemesh-container
 Restart=on-failure
 
 [Install]

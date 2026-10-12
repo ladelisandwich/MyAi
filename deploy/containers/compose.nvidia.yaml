@@ -1,0 +1,21 @@
+# NVIDIA GPU overlay for compose.yaml (Docker + nvidia-container-toolkit):
+#   docker compose -f deploy/containers/compose.yaml -f deploy/containers/compose.nvidia.yaml up -d --build
+# Podman (CDI): instead of this file, add  devices: ["nvidia.com/gpu=all"]  to both services.
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+  homemesh:
+    # Lets HomeMesh read real VRAM and utilisation through nvidia-smi (no compute is done here).
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
