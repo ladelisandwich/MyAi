@@ -17,6 +17,11 @@ homemesh start
 rc=0; homemesh status || rc=$?
 [ "$rc" = 0 ] || [ "$rc" = 2 ] || { echo "status exit $rc after start"; exit 1; }
 "$HOME/.local/share/homemesh/venv/bin/python" scripts/bench.py --runs 2 --model mock-chat
+if [ -n "${HM_REAL_MODEL:-}" ]; then
+  echo "== real inference through Ollama with $HM_REAL_MODEL (not the mock)"
+  "$HOME/.local/share/homemesh/venv/bin/python" scripts/bench.py --runs 2 --model "$HM_REAL_MODEL" | tee /tmp/real-bench.txt
+  if grep -q "\[MOCK\]" /tmp/real-bench.txt; then echo "real-model run was served by the mock"; exit 1; fi
+fi
 
 echo "== upgrade while running (must restart it)"
 ./deploy/linux/install.sh --no-web --upgrade

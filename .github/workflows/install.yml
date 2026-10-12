@@ -72,6 +72,7 @@ jobs:
           if ($LASTEXITCODE) { throw "chat after upgrade failed" }
           & $hm stop; if ($LASTEXITCODE) { throw "stop failed" }
           & $hm status; if ($LASTEXITCODE -ne 3) { throw "still running after stop ($LASTEXITCODE)" }
+          exit 0  # status exit code 3 ("not running") is the expected result here
       - name: uninstall.ps1 keeps data
         shell: powershell
         run: |

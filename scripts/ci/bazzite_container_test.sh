@@ -22,5 +22,11 @@ su - tester -c "$QUADLET -dryrun -user" > /tmp/quadlet.out 2>&1 || { cat /tmp/qu
 grep -E '^(---|ExecStart=)' /tmp/quadlet.out | cut -c1-240
 if grep -iE 'unsupported|unknown key|error' /tmp/quadlet.out; then echo "Quadlet reported problems"; exit 1; fi
 
-echo "== install lifecycle as an unprivileged user"
-su - tester -c 'bash ~/homemesh/scripts/ci/linux_install_lifecycle.sh'
+echo "== Ollama via deploy/linux/install-ollama.sh (per-user, checksum-verified), then a tiny real model"
+su - tester -c 'cd ~/homemesh && ./deploy/linux/install-ollama.sh --no-service'
+su - tester -c 'nohup ~/.local/bin/ollama serve > ~/ollama.log 2>&1 &'
+for _ in $(seq 1 60); do curl -fsS http://127.0.0.1:11434/api/version && break; sleep 1; done
+su - tester -c '~/.local/bin/ollama pull smollm2:135m'
+
+echo "== install lifecycle as an unprivileged user (mock checks + a real chat through Ollama)"
+su - tester -c 'HM_REAL_MODEL=smollm2:135m bash ~/homemesh/scripts/ci/linux_install_lifecycle.sh'
