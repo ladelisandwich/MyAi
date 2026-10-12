@@ -36,9 +36,23 @@ def _stats(values: list[float]) -> str:
     return f"median {statistics.median(values):.1f} (min {min(values):.1f}, max {max(values):.1f}, n={len(values)})"
 
 
+def wait_for_model(client: CoordinatorClient, model: str | None, wait_s: float) -> bool:
+    """Wait until a chat model (the given one, or any) is available on an online computer."""
+    deadline = time.monotonic() + wait_s
+    while True:
+        models = client.get("/api/v1/models")["models"]
+        if any(m["available"] and "completion" in m["capabilities"] and (model is None or m["name"] == model)
+               for m in models):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.5)
+
+
 def bench_chat(client: CoordinatorClient, runs: int, model: str | None) -> dict[str, list[float]]:
     out: dict[str, list[float]] = {k: [] for k in ("e2e_ms", "first_delta_ms", "ttft_ms", "tokens_per_second",
-                                                   "load_ms", "dispatch_overhead_ms", "completion_tokens")}
+                                                   "load_ms", "dispatch_overhead_ms", "completion_tokens",
+                                                   "failed_runs")}
     conv = client.post("/api/v1/conversations", {"title": "benchmark", **({"model": model} if model else {})})
     routes = set()
     for i in range(runs):
@@ -61,6 +75,7 @@ def bench_chat(client: CoordinatorClient, runs: int, model: str | None) -> dict[
                         first = (time.perf_counter() - t0) * 1000
                     elif event == "error":
                         print(f"run {i + 1}: error {data.get('code')}: {data.get('message')}", file=sys.stderr)
+                        out["failed_runs"].append(1.0)
                     elif event == "done":
                         for k, v in (data.get("metrics") or {}).items():
                             if k in out and isinstance(v, int | float):
@@ -111,14 +126,21 @@ def main() -> int:
     ap.add_argument("--node", help="node name/id for --index (default: the coordinator's own worker)")
     ap.add_argument("--queries", nargs="*", default=[])
     ap.add_argument("--skip-chat", action="store_true")
+    ap.add_argument("--wait-s", type=float, default=60, help="wait up to this long for a usable chat model")
     ap.add_argument("--url")
     ap.add_argument("--token")
     ap.add_argument("--ca-file")
     a = ap.parse_args()
     paths = default_paths()
     client = CoordinatorClient.local(load_config(paths), paths, url=a.url, token=a.token, ca_file=a.ca_file)
+    failed = False
     if not a.skip_chat:
+        if not wait_for_model(client, a.model, a.wait_s):
+            print(f"No computer offers {'model ' + a.model if a.model else 'a chat model'} (waited {a.wait_s:.0f}s). "
+                  "Check 'homemesh status'.", file=sys.stderr)
+            return 1
         r = bench_chat(client, a.runs, a.model)
+        failed = bool(r.pop("failed_runs")) or len(r["e2e_ms"]) == 0
         print("\nChat metrics (ms unless noted):")
         labels = {"e2e_ms": "end-to-end (client)", "first_delta_ms": "first text at client",
                   "ttft_ms": "time to first token (worker)", "tokens_per_second": "tokens/second",
@@ -128,7 +150,9 @@ def main() -> int:
     if a.index or a.queries:
         print()
         bench_knowledge(client, a.index, a.queries or ["test"], a.node)
-    return 0
+    if failed:
+        print("\nSome chat runs failed (see errors above); metrics cover successful runs only.", file=sys.stderr)
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
