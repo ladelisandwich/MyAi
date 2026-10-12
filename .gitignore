@@ -39,3 +39,4 @@ Thumbs.db
 # Test artifacts
 tests/.artifacts/
 screenshots/
+*.tsbuildinfo
