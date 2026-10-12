@@ -132,17 +132,19 @@ def _database(paths: AppPaths) -> Check:
                                      f"SQLite {fts}", "Pending migrations run on next start." if status == WARN else "")
 
 
-def _gpus() -> list[Check]:
-    from homemesh.hardware.detect import detect_gpus
+def _gpus(cfg: HomeMeshConfig | None = None) -> list[Check]:
+    from homemesh.hardware.detect import detect_gpus, mark_ignored_gpus
 
     gpus, warnings = detect_gpus()
+    mark_ignored_gpus(gpus, cfg.worker.ignore_gpus if cfg else [])
     out = []
     if not gpus:
         out.append(Check("GPU", INFO, "no GPU detected - CPU inference only on this computer",
                          "If this computer has a GPU: install the vendor driver (NVIDIA: nvidia-smi must work)."))
     for g in gpus:
         vram = f"{g.vram_total_mb} MB VRAM" if g.vram_total_mb else "VRAM unknown"
-        out.append(Check(f"GPU {g.index}", OK if g.vram_total_mb else WARN, f"{g.name} ({g.vendor}, {vram}, via {g.source})",
+        ignored = " - ignored for scheduling (worker.ignore_gpus)" if g.ignored else ""
+        out.append(Check(f"GPU {g.index}", OK if g.vram_total_mb else WARN, f"{g.name} ({g.vendor}, {vram}, via {g.source}){ignored}",
                          "; ".join(f"{k}: {v}" for k, v in g.unavailable.items())))
     for w in warnings:
         if "No GPU detected" not in w:
@@ -289,7 +291,7 @@ def run_doctor(paths: AppPaths) -> list[Check]:
     if cfg.has_role("worker"):
         if not cfg.has_role("coordinator"):
             checks.append(_worker_link(cfg, paths))
-        checks += _gpus()
+        checks += _gpus(cfg)
         checks += asyncio.run(_backends(cfg))
     checks.append(_service())
     return checks

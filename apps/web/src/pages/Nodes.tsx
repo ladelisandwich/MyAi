@@ -68,7 +68,7 @@ function GpuView({ g, live }: { g: GPUInfo; live?: { utilization_percent?: numbe
   const temp = live?.temperature_c ?? g.temperature_c;
   return (
     <div className="gpu stack" style={{ gap: 6 }}>
-      <div className="row"><strong className="small">{g.name}</strong><Badge>{g.vendor}</Badge>{g.integrated && <Badge>integrated</Badge>}{(g.compute_apis ?? []).map((a) => <Badge key={a} kind="accent">{a}</Badge>)}</div>
+      <div className="row"><strong className="small">{g.name}</strong><Badge>{g.vendor}</Badge>{g.integrated && <Badge>integrated</Badge>}{g.ignored && <Badge kind="warn">ignored for scheduling</Badge>}{(g.compute_apis ?? []).map((a) => <Badge key={a} kind="accent">{a}</Badge>)}</div>
       {total ? <Meter label="VRAM" value={used} max={total} detail={used != null ? `${mb(used)} used of ${mb(total)}` : `${mb(total)} total (usage not reported)`} />
         : <div className="small muted">VRAM: {g.unavailable?.vram_total_mb ?? "not reported"}</div>}
       <div className="row small muted">

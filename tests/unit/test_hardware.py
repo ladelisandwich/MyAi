@@ -139,3 +139,45 @@ def test_live_detection_never_fabricates(tmp_path):
         assert g.source in ("nvidia-smi", "sysfs", "wmi", "system_profiler")
     t = TelemetrySampler().sample()
     assert t.ram_total_mb == rep.memory.total_mb
+
+
+def _windows_amd_plus_old_nvidia():
+    """Simulated shape of a Windows PC with an RX 5700 (CIM + registry) and a GTX 745 (nvidia-smi)."""
+    smi = "0, NVIDIA GeForce GTX 745, GPU-x, 582.78, 4096, 120, 3976, 0, 35, 00000000:02:00.0, 5.0"
+    wmi = {"controllers": [
+        {"Name": "AMD Radeon RX 5700", "AdapterRAM": 4293918720, "PNPDeviceID": "PCI\\VEN_1002&DEV_731F"},
+        {"Name": "NVIDIA GeForce GTX 745", "AdapterRAM": 4293918720, "PNPDeviceID": "PCI\\VEN_10DE&DEV_1382"}],
+        "registry": [{"Desc": "AMD Radeon RX 5700", "Mem": 8 * 2**30}]}
+    return _merge_gpus(rows_to_gpus(parse_query_output(smi, QUERY_FIELDS)), parse_windows_gpu_json(json.dumps(wmi)))
+
+
+def test_free_vram_is_unknown_when_only_some_gpus_report_it():
+    from homemesh.coordinator.nodes import vram_view
+    from homemesh.protocol.hardware import GPUTelemetry, HardwareReport, Telemetry
+
+    gpus = _windows_amd_plus_old_nvidia()
+    assert [(g.vendor, g.vram_total_mb) for g in gpus] == [("nvidia", 4096), ("amd", 8192)]
+    tel = Telemetry(gpus=[GPUTelemetry(index=0, vram_free_mb=3976, vram_total_mb=4096)])
+    total, free, has_gpu = vram_view(HardwareReport.model_construct(gpus=gpus), tel)
+    # Only the GTX 745 reports live usage; summing just that would hide the RX 5700's 8 GB.
+    assert (total, free, has_gpu) == (12288, None, True)
+
+
+def test_ignored_gpus_are_shown_but_not_counted():
+    from homemesh.coordinator.nodes import vram_view
+    from homemesh.hardware.detect import TelemetrySampler, mark_ignored_gpus
+    from homemesh.protocol.hardware import GPUTelemetry, HardwareReport, Telemetry
+
+    gpus = _windows_amd_plus_old_nvidia()
+    assert mark_ignored_gpus(gpus, ["gtx 745", " "]) == {0}
+    assert gpus[0].ignored and not gpus[1].ignored
+    tel = Telemetry(gpus=[GPUTelemetry(index=0, vram_free_mb=3976)])
+    assert vram_view(HardwareReport.model_construct(gpus=gpus), tel) == (8192, None, True)
+    sampler = TelemetrySampler()
+    sampler.ignore_indices = {0}
+    assert sampler.ignore_indices == {0}
+    # Every counted GPU reporting free memory gives a real number again.
+    nv = rows_to_gpus(parse_query_output(
+        "0, NVIDIA GeForce RTX 3080, GPU-y, 580.1, 10240, 1000, 9240, 3, 40, 00000000:01:00.0, 8.6", QUERY_FIELDS))
+    assert vram_view(HardwareReport.model_construct(gpus=nv), Telemetry(gpus=[GPUTelemetry(index=0, vram_free_mb=9000)])) == (10240, 9000, True)
+    assert vram_view(HardwareReport.model_construct(gpus=[]), None) == (None, None, False)

@@ -56,6 +56,8 @@ class GPUInfo(BaseModel):
     compute_apis: list[str] = Field(default_factory=list)  # cuda, rocm, vulkan, metal, directml...
     compute_capability: str | None = None
     pci_bus_id: str | None = None
+    # Excluded by the worker's ``ignore_gpus`` setting: shown, but not counted for scheduling.
+    ignored: bool = False
     source: str = ""  # nvidia-smi | sysfs | wmi | system_profiler
     unavailable: dict[str, str] = Field(default_factory=dict)  # field -> reason it is not available
 

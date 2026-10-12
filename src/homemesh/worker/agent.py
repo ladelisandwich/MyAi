@@ -32,7 +32,7 @@ from websockets.exceptions import ConnectionClosed, InvalidStatus, InvalidURI
 from homemesh.common.config import HomeMeshConfig
 from homemesh.common.logging import get_logger
 from homemesh.common.paths import AppPaths
-from homemesh.hardware.detect import TelemetrySampler, detect_hardware
+from homemesh.hardware.detect import TelemetrySampler, detect_hardware, mark_ignored_gpus
 from homemesh.inference.base import InferenceBackend
 from homemesh.inference.factory import build_backends
 from homemesh.protocol import messages as pm
@@ -133,6 +133,7 @@ class WorkerAgent:
     async def hardware(self) -> HardwareReport:
         if self._hardware is None or time.monotonic() - self._hardware_at > 600:
             self._hardware = await asyncio.to_thread(detect_hardware, self.paths.data_dir)
+            self.sampler.ignore_indices = mark_ignored_gpus(self._hardware.gpus, self.cfg.worker.ignore_gpus)
             self._hardware_at = time.monotonic()
         return self._hardware
 

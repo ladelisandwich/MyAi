@@ -48,6 +48,27 @@ HELLO_TIMEOUT_S = 15.0
 PAIRING_TTL_S = 600
 
 
+
+def vram_view(hw: HardwareReport, tel: Telemetry | None) -> tuple[int | None, int | None, bool]:
+    """(total VRAM, free VRAM, has GPU) over the discrete GPUs that count for scheduling.
+
+    Free VRAM is only reported when *every* counted GPU reports it. On Windows only NVIDIA cards
+    give live usage, so an AMD card next to an NVIDIA one would otherwise be silently left out and
+    the node would look smaller than it is; "unknown" makes the scheduler check RAM and say so.
+    """
+    counted = [g for g in hw.gpus if not g.integrated and g.vram_total_mb and not g.ignored]
+    total = sum(g.vram_total_mb or 0 for g in counted) or None
+    if not counted:
+        return total, None, False
+    idx = {g.index for g in counted}
+    if tel and tel.gpus:
+        frees = {g.index: g.vram_free_mb for g in tel.gpus if g.index in idx and g.vram_free_mb is not None}
+    else:
+        frees = {g.index: g.vram_free_mb for g in counted if g.vram_free_mb is not None}
+    free = sum(v or 0 for v in frees.values()) if len(frees) == len(idx) else None
+    return total, free, True
+
+
 @dataclass
 class NodeConnection:
     node_id: str
@@ -431,14 +452,7 @@ class NodeManager:
             hw: HardwareReport = conn.hello.hardware
             tel = conn.telemetry
             limits = conn.hello.limits
-            discrete = [g for g in hw.gpus if not g.integrated and g.vram_total_mb]
-            vram_total = sum(g.vram_total_mb or 0 for g in discrete) or None
-            vram_free: int | None = None
-            if tel and tel.gpus:
-                frees = [g.vram_free_mb for g in tel.gpus if g.vram_free_mb is not None]
-                vram_free = sum(frees) if frees else None
-            elif discrete and all(g.vram_free_mb is not None for g in discrete):
-                vram_free = sum(g.vram_free_mb or 0 for g in discrete)
+            vram_total, vram_free, has_gpu = vram_view(hw, tel)
             ram_avail = (tel.ram_available_mb if tel and tel.ram_available_mb is not None
                          else hw.memory.available_mb)
             reserved = sum(mb for _, mb in conn.assigned_jobs.values())
@@ -459,7 +473,7 @@ class NodeManager:
                 heartbeat_age_s=now - conn.last_heartbeat, max_concurrent_jobs=limits.max_concurrent_jobs,
                 running_jobs=len(conn.assigned_jobs), ram_available_mb=ram_avail,
                 ram_reserve_mb=limits.ram_reserve_mb, vram_free_mb=vram_free, vram_total_mb=vram_total,
-                vram_reserve_percent=limits.vram_reserve_percent, has_gpu=bool(discrete),
+                vram_reserve_percent=limits.vram_reserve_percent, has_gpu=has_gpu,
                 allow_cpu_inference=limits.allow_cpu_inference,
                 external_gpu_busy=bool(tel.external_gpu_busy) if tel else False,
                 weight=row.get("weight") or 0, embedded=conn.hello.embedded,

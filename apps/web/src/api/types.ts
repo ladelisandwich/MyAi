@@ -99,6 +99,7 @@ export interface GPUInfo {
   driver_version?: string | null;
   source?: string;
   unavailable?: Record<string, string>;
+  ignored?: boolean;
 }
 
 export interface HardwareReport {

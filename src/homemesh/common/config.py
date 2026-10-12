@@ -85,6 +85,9 @@ class WorkerSection(_Section):
     task_types: list[str] = Field(default_factory=lambda: list(ALL_TASK_TYPES))
     allowed_roots: list[str] = Field(default_factory=list)
     allowed_tools: list[str] = Field(default_factory=lambda: ["system_info", "list_directory", "read_file"])
+    # GPUs HomeMesh should not count when scheduling, e.g. a weak secondary card that the model
+    # server does not use. Case-insensitive parts of the GPU name, e.g. ["GTX 745"].
+    ignore_gpus: list[str] = Field(default_factory=list)
     heartbeat_interval_s: float = Field(default=10, ge=1, le=120)
     allow_remote_mode_change: bool = True
     tls_ca_file: str = ""

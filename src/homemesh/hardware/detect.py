@@ -61,6 +61,17 @@ def detect_gpus() -> tuple[list[GPUInfo], list[str]]:
     return gpus, warnings
 
 
+def mark_ignored_gpus(gpus: list[GPUInfo], patterns: list[str]) -> set[int]:
+    """Flag GPUs whose name contains one of ``patterns`` (case-insensitive); return their indices."""
+    pats = [p.strip().lower() for p in patterns if p.strip()]
+    ignored: set[int] = set()
+    for g in gpus:
+        if any(p in g.name.lower() for p in pats):
+            g.ignored = True
+            ignored.add(g.index)
+    return ignored
+
+
 def detect_hardware(data_dir: Path | None = None) -> HardwareReport:
     gpus, warnings = detect_gpus()
     report = HardwareReport(
@@ -83,6 +94,7 @@ class TelemetrySampler:
         self.gpu_busy_threshold = gpu_busy_threshold_percent
         self.window = window
         self._busy_history: list[bool] = []
+        self.ignore_indices: set[int] = set()  # GPUs excluded by worker.ignore_gpus
         psutil.cpu_percent(interval=None)  # prime the counter
         self._has_nvidia = None
 
@@ -100,7 +112,8 @@ class TelemetrySampler:
             for g in sample_sysfs():
                 g.index = offset + g.index
                 gpus.append(g)
-        max_util = max((g.utilization_percent for g in gpus if g.utilization_percent is not None), default=None)
+        max_util = max((g.utilization_percent for g in gpus
+                        if g.utilization_percent is not None and g.index not in self.ignore_indices), default=None)
         # "External" busy: GPU loaded while we are idle -> someone else (a game) is using it.
         busy_now = bool(max_util is not None and max_util >= self.gpu_busy_threshold and running_jobs == 0)
         self._busy_history = ([*self._busy_history, busy_now])[-self.window:]
