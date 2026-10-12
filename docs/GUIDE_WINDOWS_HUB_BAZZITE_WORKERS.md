@@ -54,20 +54,7 @@ Run everything in a **normal** (not administrator) PowerShell window.
   Python 3.13 and 3.14 are both tested. **Close and reopen PowerShell** afterwards so the new commands
   are found.
 
-### 1.2 Decide which GPU Ollama may use
-
-With both cards present, Ollama uses the GTX 745 through CUDA and the RX 5700 through Vulkan. The
-GTX 745 has slow DDR3 memory and only 4 GB, so this guide gives the models to the RX 5700. Hide the
-GTX 745 from Ollama for **your user only**:
-
-```powershell
-[Environment]::SetEnvironmentVariable("CUDA_VISIBLE_DEVICES", "-1", "User")
-```
-
-Then **quit Ollama from the system tray** and start it again from the Start menu so it picks up the
-change. To undo this later: `[Environment]::SetEnvironmentVariable("CUDA_VISIBLE_DEVICES", $null, "User")`.
-
-### 1.3 Get HomeMesh and install it
+### 1.2 Get HomeMesh and install it
 
 ```powershell
 git clone --branch claude/stoic-bohr-fkoz0p https://github.com/ladelisandwich/MyAi.git $HOME\homemesh
@@ -84,7 +71,7 @@ Git opens a browser window to sign in to GitHub the first time. The installer:
 
 No administrator rights are needed. **Open a new PowerShell window** afterwards.
 
-### 1.4 Set up the hub
+### 1.3 Set up the hub
 
 ```powershell
 homemesh setup
@@ -100,23 +87,22 @@ Answer:
 * **Owner username / password:** the account you'll sign in with (password at least 10 characters).
 * **Start HomeMesh automatically when you log in?** `y`.
 
-Then tell HomeMesh to keep this PC's own worker in the background and to ignore the GTX 745:
+Then tell HomeMesh to keep this PC's own worker in the background:
 
 ```powershell
 notepad (homemesh config path)
 ```
 
-In the `[worker]` section, change or add these two lines, then save:
+In the `[worker]` section, change the `mode` line to the following, then save:
 
 ```toml
 mode = "background"
-ignore_gpus = ["GTX 745"]
 ```
 
 `background` means chats go to the Bazzite GPUs first. This PC still does document indexing and
 embeddings, and takes chats only if no other computer can.
 
-### 1.5 Network profile and firewall
+### 1.4 Network profile and firewall
 
 1. Settings → Network & internet → your Wi-Fi or Ethernet connection → **Network profile type: Private**.
 2. `homemesh start`. The first time it listens on the network, Windows asks whether to allow
@@ -125,7 +111,7 @@ embeddings, and takes chats only if no other computer can.
    firewall* → allow `pythonw.exe` / `python.exe` for **Private**.
 3. `homemesh status` should say `ok`.
 
-### 1.6 Models on the hub
+### 1.5 Models on the hub
 
 ```powershell
 ollama pull nomic-embed-text
@@ -134,13 +120,30 @@ ollama pull nomic-embed-text
 This is the embedding model for document search (about 270 MB). Optionally add a small chat model for
 when the Bazzite PCs are off: `ollama pull llama3.2:3b`.
 
-### 1.7 Open the web app
+**Optional: choose which GPU Ollama uses on this PC.** Ollama picks for itself between the RX 5700
+(through Vulkan) and the GTX 745 (through CUDA). For embeddings either is fine, so you can skip this.
+To pin it to the RX 5700:
+
+1. After a first `ollama run llama3.2:3b "hi"`, open `%LOCALAPPDATA%\Ollama\server.log`. Find the
+   `inference compute` lines, which list each GPU with its `library` (CUDA or Vulkan), `id` and name.
+2. Set two user environment variables (Settings → search "environment variables" → *Edit
+   environment variables for your account*), then quit Ollama from the tray and start it again:
+   * `CUDA_VISIBLE_DEVICES` = `-1` stops Ollama using CUDA, and so the GTX 745 through CUDA. It also
+     hides NVIDIA GPUs from other CUDA programs you start, though games don't use CUDA.
+   * `GGML_VK_VISIBLE_DEVICES` = the Vulkan id the log showed for the RX 5700. Without it, Ollama could
+     use the GTX 745 through Vulkan instead.
+3. Tell HomeMesh to leave the GTX 745 out of its scheduling: add `ignore_gpus = ["GTX 745"]` under
+   `[worker]` in `homemesh.toml`, then `homemesh restart`.
+
+Check with `ollama ps` while a model is loaded.
+
+### 1.6 Open the web app
 
 Open **https://localhost:8765** in Edge or Chrome. The browser warns about the certificate because
 it comes from HomeMesh's own certificate authority. Click **Advanced → Continue**, or trust the
 certificate once (see INSTALLATION.md, *Trusting the HomeMesh certificate*). Sign in.
 
-### 1.8 Create pairing codes
+### 1.7 Create pairing codes
 
 ```powershell
 homemesh node pair
@@ -238,7 +241,7 @@ Same as the desktop (2.1–2.4) with these differences:
 
 ## 4. Finish on the hub (web app)
 
-1. **Computers:** all three appear online with their GPUs. The GTX 745 shows "ignored for scheduling".
+1. **Computers:** all three appear online with their GPUs.
 2. **Models → Model roles:** Primary assistant → `qwen3:8b`; Embeddings → `nomic-embed-text`.
 3. **Chat:** ask something. Each reply shows which model and computer answered, e.g.
    `qwen3:8b · on bazzite-3080 (ollama, gpu)`.
@@ -256,9 +259,9 @@ Same as the desktop (2.1–2.4) with these differences:
   `& "$env:LOCALAPPDATA\Programs\HomeMesh\venv\Scripts\python.exe" scripts\bench.py --runs 3 --model qwen3:8b`
   prints time-to-first-token and tokens/second measured by Ollama.
 
-If the RX 5700 isn't used (`ollama ps` on Windows shows `100% CPU`), Ollama's Vulkan backend didn't
-pick it up. Update the AMD driver, and see Ollama's GPU documentation (`GGML_VK_VISIBLE_DEVICES`).
-The hub still works fine as coordinator and embedder.
+On the hub, `ollama ps` shows whether Ollama uses a GPU at all. If it says `100% CPU`, check the
+`inference compute` lines in `%LOCALAPPDATA%\Ollama\server.log`, update the AMD driver, and see the
+optional GPU step in 1.5. The hub works fine as coordinator and embedder either way.
 
 ## 6. Phones and other devices
 
