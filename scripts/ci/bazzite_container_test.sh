@@ -10,24 +10,29 @@ podman --version
 command -v brew node npm nvidia-smi firewall-cmd zstd git curl || true
 python3 -c 'import compression.zstd' 2>/dev/null && echo 'python3 has compression.zstd' || true
 
-useradd -m tester
+useradd -m tester 2>/dev/null
 cp -r /src /home/tester/homemesh
 chown -R tester:tester /home/tester/homemesh
+# Run as the unprivileged user. setpriv, not su: containers have no PAM login sessions.
+as_tester() {
+  setpriv --reuid=tester --regid=tester --init-groups env -i HOME=/home/tester USER=tester LOGNAME=tester \
+    PATH=/home/tester/.local/bin:/usr/local/bin:/usr/bin:/bin bash -lc "$1"
+}
 
 echo "== Quadlet dry-run with this Podman"
-su - tester -c 'mkdir -p ~/.config/containers/systemd && cp ~/homemesh/deploy/bazzite/*.container ~/homemesh/deploy/bazzite/*.network ~/.config/containers/systemd/'
+as_tester 'mkdir -p ~/.config/containers/systemd && cp ~/homemesh/deploy/bazzite/*.container ~/homemesh/deploy/bazzite/*.network ~/.config/containers/systemd/'
 QUADLET=""
 for q in /usr/libexec/podman/quadlet /usr/lib/podman/quadlet; do [ -x "$q" ] && QUADLET="$q" && break; done
 [ -n "$QUADLET" ] || { echo "quadlet generator not found"; exit 1; }
-su - tester -c "$QUADLET -dryrun -user" > /tmp/quadlet.out 2>&1 || { cat /tmp/quadlet.out; echo "Quadlet rejected the unit files"; exit 1; }
+as_tester "$QUADLET -dryrun -user" > /tmp/quadlet.out 2>&1 || { cat /tmp/quadlet.out; echo "Quadlet rejected the unit files"; exit 1; }
 grep -E '^(---|ExecStart=)' /tmp/quadlet.out | cut -c1-240
 if grep -iE 'unsupported|unknown key|error' /tmp/quadlet.out; then echo "Quadlet reported problems"; exit 1; fi
 
 echo "== Ollama via deploy/linux/install-ollama.sh (per-user, checksum-verified), then a tiny real model"
-su - tester -c 'cd ~/homemesh && ./deploy/linux/install-ollama.sh --no-service'
-su - tester -c 'nohup ~/.local/bin/ollama serve > ~/ollama.log 2>&1 &'
+as_tester 'cd ~/homemesh && bash deploy/linux/install-ollama.sh --no-service'
+as_tester 'nohup ~/.local/bin/ollama serve > ~/ollama.log 2>&1 &'
 for _ in $(seq 1 60); do curl -fsS http://127.0.0.1:11434/api/version && break; sleep 1; done
-su - tester -c '~/.local/bin/ollama pull smollm2:135m'
+as_tester '~/.local/bin/ollama pull smollm2:135m'
 
 echo "== install lifecycle as an unprivileged user (mock checks + a real chat through Ollama)"
-su - tester -c 'HM_REAL_MODEL=smollm2:135m bash ~/homemesh/scripts/ci/linux_install_lifecycle.sh'
+as_tester 'HM_REAL_MODEL=smollm2:135m bash ~/homemesh/scripts/ci/linux_install_lifecycle.sh'
