@@ -110,13 +110,15 @@ def cmd_stop(ctx: Ctx) -> int:
     from homemesh.cli import service
 
     print(service.stop(ctx.paths, force=ctx.args.force))
-    return EXIT_OK
+    return EXIT_ERROR if service.read_pid(ctx.paths) else EXIT_OK
 
 
 def cmd_restart(ctx: Ctx) -> int:
     from homemesh.cli import service
 
     print(service.stop(ctx.paths, force=ctx.args.force))
+    if service.read_pid(ctx.paths):
+        return EXIT_ERROR
     time.sleep(1)
     print(service.start(ctx.paths))
     return EXIT_OK

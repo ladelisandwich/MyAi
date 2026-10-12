@@ -54,3 +54,7 @@ First working version.
   graceful shutdown on every OS.
 * Worker join on a fresh computer kept the coordinator role; it now configures a worker-only node.
 * "Saved to memory" notices were lost on reload; they are now stored with the message.
+* Installers treated "running but degraded" (`homemesh status` exit 2, e.g. Ollama down) as not running,
+  so an upgrade would not stop/restart HomeMesh; `homemesh stop` now also exits non-zero if the process
+  is still alive.
+* `scripts/bench.py` exited 0 when every chat failed; it now waits for a usable model and fails honestly.

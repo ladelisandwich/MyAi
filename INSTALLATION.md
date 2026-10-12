@@ -44,7 +44,7 @@ Each worker has a **mode**, which you can change at any time from the Nodes page
 * **Ollama** (<https://ollama.com/download>) on every computer that should run models, with at least one model:
   `ollama pull llama3.2:3b` (chat) and `ollama pull nomic-embed-text` (document search).
   Ollama listens on `127.0.0.1:11434` by default. Keep it that way: HomeMesh talks to it locally.
-* **Node.js 20.19+**, only to build the web UI once from source. Release archives already contain it.
+* **Node.js 20.19+**, only to build the web UI once from source (no prebuilt release archives are published yet).
 * GPU drivers as usual (NVIDIA: `nvidia-smi` must work). HomeMesh does not install drivers.
 
 <a id="linux"></a>

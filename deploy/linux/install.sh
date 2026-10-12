@@ -75,9 +75,13 @@ mkdir -p "$BIN_DIR"
 ln -sf "$VENV/bin/homemesh" "$BIN_DIR/homemesh"
 case ":$PATH:" in *":$BIN_DIR:"*) ;; *) echo "Add $BIN_DIR to your PATH (e.g. in ~/.bashrc): export PATH=\"$BIN_DIR:\$PATH\"";; esac
 
-if [ "$UPGRADE" = 1 ] && "$BIN_DIR/homemesh" status >/dev/null 2>&1; then
-  say "Restarting HomeMesh to apply the upgrade (database migrations run automatically, with a backup first)…"
-  "$BIN_DIR/homemesh" restart || true
+if [ "$UPGRADE" = 1 ]; then
+  # 'homemesh status' exits 0 when running, 2 when running but degraded (e.g. Ollama down), 3 when stopped.
+  rc=0; "$BIN_DIR/homemesh" status >/dev/null 2>&1 || rc=$?
+  if [ "$rc" = 0 ] || [ "$rc" = 2 ]; then
+    say "Restarting HomeMesh to apply the upgrade (database migrations run automatically, with a backup first)…"
+    "$BIN_DIR/homemesh" restart || true
+  fi
 fi
 
 say "Installed: $("$VENV/bin/homemesh" version)"

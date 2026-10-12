@@ -18,7 +18,7 @@ packages and never writes outside your home directory. There are two supported w
 ## A. Native user install
 
 ```bash
-git clone https://github.com/ladelisandwich/myai.git ~/src/homemesh   # or unpack a release
+git clone https://github.com/ladelisandwich/myai.git ~/src/homemesh
 cd ~/src/homemesh
 ./deploy/linux/install.sh          # Python 3 is preinstalled on Bazzite
 homemesh setup                     # standalone, coordinator, worker or client
@@ -30,7 +30,7 @@ homemesh doctor
 The web UI needs a one-time build with Node.js 20.19+. Bazzite does not include Node; you can
 use Homebrew (`brew install node`; Universal Blue images such as Bazzite provide `brew`) or build inside a distrobox
 (`distrobox create -i fedora:42 -n build && distrobox enter build -- ./scripts/build_web.sh`).
-Release archives that already contain `src/homemesh/web_dist/` skip this step.
+Once `src/homemesh/web_dist/` exists (for example copied from another computer where you built it), this step is skipped.
 
 To keep HomeMesh running while nobody is logged in (a headless worker), run once:
 `loginctl enable-linger $USER`. The installer only prints this hint; it never runs it for you.

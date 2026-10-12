@@ -36,7 +36,7 @@ telemetry, and no cloud unless you explicitly turn it on.
 | Web app: Chat, Dashboard, Nodes, Models, Memory, Knowledge, Jobs, Settings; installable PWA; light/dark | ✅ |
 | `homemesh` CLI: setup, start/stop, status, doctor, node, worker, model, jobs, backup/restore, tls, config | ✅ |
 | Encrypted backups and non-destructive restore | ✅ |
-| Linux / Bazzite (systemd user service or Podman Quadlets), Windows (per-user), containers | ⚠️ written; only Linux native was run (see [MILESTONES](docs/MILESTONES.md)) |
+| Install paths: Linux user install (run), Windows (tests + start/chat/stop lifecycle run in CI; installer script not yet run on a PC), Bazzite Quadlets and containers (written, not yet run) | ⚠️ see [MILESTONES](docs/MILESTONES.md) |
 | Voice, vision, splitting one model across computers | 🗺️ designed, not implemented ([ROADMAP](ROADMAP.md)) |
 
 The **mock backend** exists for automated tests only. It is off by default, and when enabled every
@@ -45,7 +45,7 @@ response is labelled `MOCK` in the API and UI. It is never presented as real AI 
 ## Quick start (one computer)
 
 Requirements: Python 3.11+, [Ollama](https://ollama.com/download) with at least one model, and
-Node.js 20.19+ once to build the web UI (not needed if you use a release with the UI included).
+Node.js 20.19+ once to build the web UI (no prebuilt release archives are published yet).
 
 ```bash
 git clone https://github.com/ladelisandwich/myai.git homemesh && cd homemesh

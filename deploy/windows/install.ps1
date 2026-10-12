@@ -90,8 +90,17 @@ if ((Test-Path $Exe) -and -not $Upgrade) {
 } else {
   $wasRunning = $false
   if ((Test-Path $Exe) -and $Upgrade) {
-    try { & $Exe status *> $null; $wasRunning = ($LASTEXITCODE -eq 0) } catch { $wasRunning = $false }
-    if ($wasRunning) { Say "Stopping HomeMesh for the upgrade..."; & $Exe stop }
+    # Exit codes of 'homemesh status': 0 running, 2 running but degraded (e.g. Ollama down), 3 not running.
+    # It must be stopped before upgrading: Windows locks the running python.exe and extension modules.
+    $prevPref = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+    & $Exe status *> $null
+    $wasRunning = ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq 2)
+    $ErrorActionPreference = $prevPref
+    if ($wasRunning) {
+      Say "Stopping HomeMesh for the upgrade..."
+      & $Exe stop
+      if ($LASTEXITCODE) { Fail "Could not stop HomeMesh; run 'homemesh stop --force' and try again." }
+    }
   }
   Say "Installing into $Venv ..."
   New-Item -ItemType Directory -Force -Path $Prefix | Out-Null
