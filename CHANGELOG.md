@@ -46,6 +46,11 @@ First working version.
 * **Tests:** unit and integration tests (real coordinator, simulated workers over real sockets); opt-in
   smoke tests against a real Ollama; CI on Linux and Windows including a start/chat/stop lifecycle.
 
+* **Install tooling:** per-user, checksum-verified Ollama installer for Linux/Bazzite
+  (`deploy/linux/install-ollama.sh`); `worker.ignore_gpus`; `homemesh tls init --new-ca`; a step-by-step
+  guide for a Windows 11 hub with Bazzite workers; CI that runs the real installers on Windows (PowerShell
+  5.1), inside the Bazzite image, and builds/runs the container image; Python 3.14 support.
+
 ### Fixed during development (found by CI and real-process testing)
 
 * Backup verification left the extracted database open, which broke verify/restore on Windows.
@@ -58,3 +63,7 @@ First working version.
   so an upgrade would not stop/restart HomeMesh; `homemesh stop` now also exits non-zero if the process
   is still alive.
 * `scripts/bench.py` exited 0 when every chat failed; it now waits for a usable model and fails honestly.
+* On mixed-GPU machines the coordinator treated the free memory of only the GPUs that report it
+  (on Windows: NVIDIA) as the node's free VRAM; it is now "unknown" unless every counted GPU reports it.
+* Windows PowerShell 5.1 turned harmless pip/npm stderr output into fatal errors when the installer's
+  output was redirected; native calls now rely on exit codes. Python detection finds 3.14-only systems.

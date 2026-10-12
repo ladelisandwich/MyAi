@@ -109,6 +109,7 @@ allowed_roots = ["D:/Documents/Notes"]
 | `gpu_busy_threshold_percent` | `85` | GPU utilisation by *other* programs above which balanced/background workers take no new GPU work. |
 | `task_types` | all | Subset of `chat`, `embed`, `knowledge.scan`, `tool.exec`, `model.manage`. |
 | `allowed_roots` | `[]` | Folders this computer allows to be indexed or read by tools. Empty = none. Sensitive locations (`.ssh`, `.gnupg`, browser profiles, password stores, `.env` files, private keys) are refused even inside allowed folders. Manage with `homemesh worker allow-path` / `disallow-path`. |
+| `ignore_gpus` | `[]` | GPUs HomeMesh should not count when scheduling, by part of their name, e.g. `["GTX 745"]`: for a card your model server doesn't use (hide it from Ollama too, e.g. `CUDA_VISIBLE_DEVICES=-1`). They are still shown, marked "ignored for scheduling". |
 | `allowed_tools` | `["system_info", "list_directory", "read_file"]` | Tools this computer agrees to run. `write_file` must be added explicitly and still needs your approval per use. |
 | `heartbeat_interval_s` | `10` | |
 | `allow_remote_mode_change` | `true` | Let the coordinator UI change this computer's mode. |

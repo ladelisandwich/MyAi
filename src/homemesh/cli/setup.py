@@ -150,7 +150,7 @@ def run_setup(args: argparse.Namespace, paths: AppPaths) -> int:
         cfg.node.roles = ["worker"]
         url = args.coordinator or ask("Coordinator address (e.g. https://192.168.1.10:8765)", "", interactive=interactive)
         code = args.code or ask("Pairing code (from the coordinator's 'Add a computer' dialog)", "", interactive=interactive)
-        fp = args.fingerprint or (ask("Coordinator TLS fingerprint (SHA256:...)", "", interactive=interactive)
+        fp = args.fingerprint or (ask("Coordinator TLS fingerprint (AA:BB:CC:...)", "", interactive=interactive)
                                   if url.startswith("https://") and not args.system_trust else None)
         if args.ollama_url:
             cfg.inference.backends = [BackendConfig(name="ollama", type="ollama", url=args.ollama_url)]

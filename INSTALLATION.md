@@ -4,6 +4,9 @@ HomeMesh runs as a normal user program. No installer needs administrator/root ri
 none of them change firewall rules, security settings or system packages. Wherever such a
 change would help, the docs give you the command to run yourself.
 
+> Setting up a Windows 11 PC as the hub with Bazzite GPU machines as workers? Follow the
+> step-by-step [Windows hub + Bazzite workers guide](docs/GUIDE_WINDOWS_HUB_BAZZITE_WORKERS.md).
+
 * [Concepts: roles and modes](#concepts)
 * [Linux (Fedora, Ubuntu, Arch, …)](#linux)
 * [Bazzite and other immutable systems](#bazzite)
@@ -41,9 +44,13 @@ Each worker has a **mode**, which you can change at any time from the Nodes page
 ## Prerequisites
 
 * **Python 3.11 or newer** with `venv` and SQLite FTS5 (standard in python.org, Fedora, Ubuntu and Arch builds).
-* **Ollama** (<https://ollama.com/download>) on every computer that should run models, with at least one model:
+* **Ollama** on every computer that should run models, with at least one model:
   `ollama pull llama3.2:3b` (chat) and `ollama pull nomic-embed-text` (document search).
   Ollama listens on `127.0.0.1:11434` by default. Keep it that way: HomeMesh talks to it locally.
+  * **Windows:** the installer from <https://ollama.com/download> (per user, no admin), or `winget install Ollama.Ollama`.
+  * **Linux / Bazzite:** `bash deploy/linux/install-ollama.sh` installs the official release for your user only.
+    It verifies the SHA-256, installs under `~/.local/share/ollama`, and runs a systemd user service on
+    127.0.0.1. No root and no `curl | sh`; NVIDIA needs only the driver (Bazzite: a `-nvidia` image).
 * **Node.js 20.19+**, only to build the web UI once from source (no prebuilt release archives are published yet).
 * GPU drivers as usual (NVIDIA: `nvidia-smi` must work). HomeMesh does not install drivers.
 
@@ -189,14 +196,42 @@ to reach the coordinator's URL.
 <a id="clients"></a>
 ## Phones and other devices
 
-Open the coordinator URL (`https://192.168.1.10:8765`) in a browser. With a self-signed CA the
-browser warns until you trust the CA: download it from `https://<coordinator>:8765/api/v1/tls/ca`
-and install it as a trusted certificate on that device (iOS: Settings → General → About →
-Certificate Trust Settings after installing the profile; Android: Settings → Security →
-Encryption & credentials → Install a certificate → CA certificate). After that, **Add to Home
-Screen** installs HomeMesh as an app.
+Open the coordinator URL (`https://192.168.1.10:8765`) in a browser. Until you trust the HomeMesh
+certificate the browser shows a warning (next section). After that, **Add to Home Screen** (phones) or
+**Install app** (desktop browsers) installs HomeMesh as an app.
 
-Alternatively, put HomeMesh behind a reverse proxy with a publicly trusted certificate (next section).
+Alternatively, put HomeMesh behind a reverse proxy with a publicly trusted certificate (see below).
+
+<a id="trusting-the-certificate"></a>
+## Trusting the HomeMesh certificate
+
+With `tls_mode = "self_signed"`, HomeMesh creates its **own certificate authority (CA)** on the
+coordinator and signs the server certificate with it. Workers pin this CA automatically when they join.
+Browsers don't know it, so they warn until you add the CA as trusted **on each device where you use the
+web app**. Clicking through the warning also works, but installing the app as a PWA needs the CA trusted.
+
+1. **Get the CA certificate:** on the coordinator it is `data/tls/ca.pem`. On Windows that's
+   `%LOCALAPPDATA%\HomeMesh\data\tls\ca.pem`; on Linux `~/.local/share/homemesh/data/tls/ca.pem`. Other
+   devices can download it from `https://<coordinator>:8765/api/v1/tls/ca`.
+2. **Check it is the right one:** `homemesh tls show` on the coordinator prints the fingerprint. Your
+   device shows the same SHA-256 fingerprint when you install the certificate. Compare them.
+3. **Install it:**
+   * **Windows (Edge, Chrome):** `certutil -user -addstore Root ca.pem` in a normal PowerShell window.
+     Windows asks you to confirm and shows the thumbprint. This affects only your user account.
+   * **Firefox (Windows or Linux, including the Bazzite Flatpak):** Settings → Privacy & Security →
+     Certificates → View Certificates → Authorities → Import → tick *Trust this CA to identify websites*.
+   * **Chrome/Chromium on Linux:** Settings → Privacy and security → Security → Manage certificates →
+     Authorities → Import.
+   * **Android:** Settings → Security → Encryption & credentials → Install a certificate → CA certificate.
+   * **iPhone/iPad:** open the CA download link in Safari and install the profile, then enable it under
+     Settings → General → About → Certificate Trust Settings.
+
+**Know what you are trusting.** A device that trusts this CA accepts any certificate signed with its
+private key (`data/tls/ca.key`, readable only by your user on the coordinator), for any site name.
+Keep that key private: store backups of the data folder encrypted (`homemesh backup create --encrypt`),
+and remove the CA from your devices if you stop using HomeMesh. If the key might have leaked, run
+`homemesh stop` and `homemesh tls init --new-ca` on the coordinator, re-join the workers, and replace
+the CA on your devices.
 
 <a id="reverse-proxy"></a>
 ## Behind your own reverse proxy

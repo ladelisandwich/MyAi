@@ -541,6 +541,15 @@ def cmd_tls(ctx: Ctx) -> int:
     if ctx.args.action == "init":
         cfg = ctx.cfg
         extra = list(dict.fromkeys([*cfg.server.tls_extra_sans, *(ctx.args.san or [])]))
+        if ctx.args.new_ca and ctx.paths.tls_dir.exists():
+            from homemesh.cli import service
+
+            if service.read_pid(ctx.paths):
+                print("✗ Stop HomeMesh first ('homemesh stop'), then run this again.")
+                return EXIT_USAGE
+            aside = ctx.paths.tls_dir.with_name(f"tls-replaced-{time.strftime('%Y%m%d-%H%M%S')}")
+            ctx.paths.tls_dir.rename(aside)
+            print(f"  Previous certificate authority moved to {aside} (not deleted).")
         mat = ensure_tls(ctx.paths.tls_dir, extra)
         cfg.server.tls_mode = "self_signed"
         cfg.server.tls_extra_sans = extra
@@ -549,6 +558,10 @@ def cmd_tls(ctx: Ctx) -> int:
         print(f"  CA fingerprint: {mat.ca_fingerprint}")
         print("  To accept connections from other devices also set server.host = \"0.0.0.0\" (or run 'homemesh setup'),"
               " then restart.")
+        if ctx.args.new_ca:
+            print("  New CA: every worker must join again ('homemesh worker leave' then 'worker join' with a new code),\n"
+                  "  and devices that trusted the old CA need the new one (INSTALLATION.md, 'Trusting the HomeMesh "
+                  "certificate').")
         return EXIT_OK
     ca = ctx.paths.tls_dir / "ca.pem"
     if not ca.exists():
@@ -720,6 +733,8 @@ def build_parser() -> argparse.ArgumentParser:
     t = sub.add_parser("tls", help="local TLS certificates")
     t.add_argument("action", choices=["init", "show"])
     t.add_argument("--san", action="append", help="extra host name or IP for the certificate (repeatable)")
+    t.add_argument("--new-ca", action="store_true",
+                   help="init: replace the certificate authority (e.g. if its key may have leaked); the old one is kept aside")
     t.set_defaults(func=cmd_tls)
 
     c = sub.add_parser("config", help="show, locate or validate homemesh.toml")

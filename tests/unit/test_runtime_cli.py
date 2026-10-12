@@ -47,3 +47,17 @@ def test_cli_output_survives_legacy_console_encoding(tmp_path):
                        timeout=60, check=False)
     assert r.returncode == 0, r.stderr.decode("cp1252", "replace")
     assert r.stdout.decode("cp1252").startswith("[ok] ")
+
+
+def test_tls_init_new_ca_replaces_ca_and_keeps_old(tmp_path):
+    from homemesh.cli.main import main
+    from homemesh.coordinator.tls import ca_fingerprint
+
+    assert main(["--home", str(tmp_path), "tls", "init"]) == 0
+    first = ca_fingerprint(tmp_path / "data" / "tls" / "ca.pem")
+    assert main(["--home", str(tmp_path), "tls", "init"]) == 0  # idempotent: same CA
+    assert ca_fingerprint(tmp_path / "data" / "tls" / "ca.pem") == first
+    assert main(["--home", str(tmp_path), "tls", "init", "--new-ca"]) == 0
+    assert ca_fingerprint(tmp_path / "data" / "tls" / "ca.pem") != first
+    kept = list((tmp_path / "data").glob("tls-replaced-*"))
+    assert len(kept) == 1 and ca_fingerprint(kept[0] / "ca.pem") == first

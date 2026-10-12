@@ -83,6 +83,7 @@ utilisation; it appears on the **Nodes** page within seconds.
 | | |
 |---|---|
 | [INSTALLATION.md](INSTALLATION.md) | Linux, Bazzite, Windows, containers, multi-computer setup, upgrades |
+| [Windows hub + Bazzite workers guide](docs/GUIDE_WINDOWS_HUB_BAZZITE_WORKERS.md) | Step by step for a Windows 11 coordinator with Bazzite GPU workers |
 | [CONFIGURATION.md](CONFIGURATION.md) | Every `homemesh.toml` option, environment overrides, in-app settings |
 | [SECURITY.md](SECURITY.md) | Threat model, pairing, TLS, auth, tools, what is and isn't protected |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Symptoms → causes → fixes |
