@@ -41,6 +41,18 @@ jobs:
         run: |
           homemesh version
           homemesh config validate
+      - name: Lifecycle (setup, background start, chat via API, stop) with the labelled mock backend
+        shell: bash
+        env:
+          HOMEMESH_HOME: ${{ runner.temp }}/hm-lifecycle
+        run: |
+          echo "correct-horse-battery" | homemesh setup --mode standalone --non-interactive --username owner \
+            --password-stdin --mock --no-service --port 18923
+          homemesh start
+          homemesh status || test $? -eq 2     # 2 = running but degraded (no Ollama on CI runners)
+          python scripts/bench.py --runs 2 --model mock-chat
+          homemesh stop
+          if homemesh status; then echo "still running after stop"; exit 1; fi
 
   web:
     name: Web client

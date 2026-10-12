@@ -34,3 +34,16 @@ def test_worker_link_reports_protocol_mismatch(tmp_path, monkeypatch):
     monkeypatch.setattr(doctor.httpx, "get", fake_get)
     check = doctor._worker_link(HomeMeshConfig(), paths)
     assert check.status == doctor.FAIL and "protocol v99" in check.detail and "Upgrade" in check.hint
+
+
+def test_cli_output_survives_legacy_console_encoding(tmp_path):
+    """Windows consoles redirected to a pipe use cp1252, which has no ✓/✗; output must not crash."""
+    import os
+    import subprocess
+    import sys
+
+    env = {**os.environ, "PYTHONIOENCODING": "cp1252", "HOMEMESH_HOME": str(tmp_path)}
+    r = subprocess.run([sys.executable, "-m", "homemesh", "config", "validate"], capture_output=True, env=env,
+                       timeout=60, check=False)
+    assert r.returncode == 0, r.stderr.decode("cp1252", "replace")
+    assert r.stdout.decode("cp1252").startswith("[ok] ")

@@ -1,0 +1,199 @@
+# Troubleshooting
+
+Start with:
+
+```bash
+homemesh status        # running? which computers are online? warnings
+homemesh doctor        # OS, Python, GPU, backends, coordinator link, TLS, database, ports, service
+homemesh logs -f       # live log (data/logs/homemesh.log)
+```
+
+Errors in the UI and API have a short **code** (shown below in `monospace`) and a hint. The
+**Jobs** page shows, for every request, which computer was chosen and why the others were not.
+
+## Installation and start-up
+
+**`homemesh: command not found`**
+Linux: add `~/.local/bin` to `PATH` (`export PATH="$HOME/.local/bin:$PATH"` in `~/.bashrc`). Windows:
+open a *new* terminal after installing; if it's still missing, the installer was run with `-NoPath`.
+Use `%LOCALAPPDATA%\Programs\HomeMesh\bin\homemesh.cmd` directly.
+
+**"Python is missing venv or SQLite FTS5 support"**
+Ubuntu/Debian: `sudo apt install python3-venv`. Use a python.org or distribution Python. Some
+minimal builds lack FTS5.
+
+**"Refusing to start: server.host=… exposes HomeMesh to the network without TLS"**
+This is deliberate. Run `homemesh tls init` (sets `tls_mode = "self_signed"`), use a reverse proxy
+(`tls_mode = "proxy"` with `host = "127.0.0.1"`), or, only on a network you fully trust, set
+`allow_insecure_lan = true`.
+
+**Port already in use**
+`homemesh doctor` shows it. Another HomeMesh may already be running (`homemesh status`), or change
+`server.port`.
+
+**Browser shows `web_ui_missing`: "The web interface has not been built"**
+The Python package has no `web_dist`. Build it with `scripts/build_web.sh` (Node.js 20.19+) and
+reinstall (`deploy/linux/install.sh --upgrade`), or use a release that includes it. The API and CLI
+work without it.
+
+**First-run setup asks for a setup token**
+It's printed in the console/log on first start and saved in `data/secrets/setup-token.txt`. Or create
+the owner from a terminal: `homemesh setup` or `homemesh user create-owner`.
+
+**Forgot the password**
+On the coordinator computer: `homemesh user reset-password` (this revokes all sessions).
+
+## Models and inference
+
+**`backend_unreachable`: "Ollama at http://127.0.0.1:11434 is not reachable"**
+Start Ollama (`ollama serve`, or its desktop app/system service). If Ollama runs elsewhere, set
+`inference.backends[].url`. In containers, use `HOMEMESH_OLLAMA_URL=http://ollama:11434`.
+
+**"No chat model is available"**
+`ollama pull llama3.2:3b` on any worker, or Models → Download. The model list refreshes automatically
+(or press Refresh).
+
+**`model_not_found` / `model_incompatible`**
+The selected model isn't on any online computer, or lacks a needed capability (e.g. tools, vision,
+embedding). Models → *Model roles* lists only compatible models. Capabilities come from Ollama; for
+llama.cpp/vLLM they must be declared in `declared_models` (HomeMesh never guesses).
+
+**`insufficient_memory`: "model X needs ~N GB; the most free GPU memory is M GB"**
+HomeMesh doesn't load a model that won't fit in **free** VRAM minus the mode's reserve. Options:
+choose a smaller or more quantised model, unload other models (Models → Unload), close GPU-heavy apps,
+switch the node to *performance* mode (smaller reserve), or allow CPU inference
+(`worker.allow_cpu_inference = true`, slower).
+
+**`no_eligible_worker`: every computer was rejected**
+The error lists the reason per computer: `paused`, `at_capacity`, `gpu_busy_external` (a game is using
+the GPU in balanced/background mode), `stale_heartbeat`, `offline`, … Wait, change the node's mode, or
+pick another model.
+
+**`timeout` / "all computers are busy"**
+Interactive requests wait up to `server.queue_timeout_s` (30 s) for capacity. Raise
+`worker.max_concurrent_jobs` (if the hardware can take it) or add a computer.
+
+**Slow first reply**
+The first request loads the model into memory (`load_ms` in the message details). Ollama keeps it
+loaded for `inference.keep_alive` (10 minutes). Use Models → Load to preload.
+
+**Replies say `MOCK`**
+`inference.mock_enabled` or `HOMEMESH_MOCK=1` is on. That's for testing only. Turn it off and restart.
+
+**Ollama "cloud" models are missing**
+Models that Ollama proxies to a remote service are hidden unless `[cloud] enabled = true` and the
+backend has `allow_remote_models = true`. That's intentional.
+
+## Computers (workers)
+
+**Join fails: "fingerprint mismatch … possible impersonation"**
+The certificate presented doesn't belong to the coordinator whose fingerprint you entered. Check the
+URL and copy the fingerprint again from the coordinator (`homemesh tls show` or the pairing dialog).
+If the coordinator's TLS was re-initialised, use the new fingerprint. **Don't** work around this.
+
+**Join fails: `pairing_invalid`**
+Codes expire after 10 minutes and work once. Create a new one. Look-alike characters (O/0, I/L/1),
+spaces and missing dashes are tolerated.
+
+**Join refuses `http://` to another computer**
+Workers won't send credentials over plain HTTP across the network. Enable TLS on the coordinator, or
+pass `--allow-insecure-http` if you accept that risk (e.g. inside a VPN).
+
+**Worker shows offline**
+On the worker: `homemesh status` (is it running? can it reach the coordinator?) and `homemesh logs`.
+Check that the coordinator URL resolves from the worker and the coordinator's firewall allows port 8765
+from the LAN. Workers reconnect automatically with back-off. A worker whose clock is far off still
+works (heartbeats are timed by the coordinator).
+
+**Worker log: "credential rejected (4401)" / "node revoked (4403)"**
+The node was revoked or its credential replaced. Re-join with a new pairing code
+(`homemesh worker leave`, then `homemesh worker join …`).
+
+**Worker log: "protocol incompatible (4406)"**
+Coordinator and worker versions are too far apart. Upgrade both (coordinator first).
+
+**"superseded (4409)"**
+Two processes are running with the same worker identity (for example, a copied data folder). Stop one;
+each computer needs its own `worker join`.
+
+**GPU not detected / VRAM "unknown"**
+NVIDIA: `nvidia-smi` must work in the same environment HomeMesh runs in (inside a container the GPU must
+be passed through; see deploy/bazzite/README.md). AMD/Intel on Linux: the amdgpu/i915/xe driver must
+expose sysfs memory info. Without VRAM telemetry the scheduler checks RAM only and says so in its decisions.
+
+**The game stutters while HomeMesh runs**
+Put that computer in **balanced** (pauses new GPU work above `gpu_busy_threshold_percent`) or
+**background** mode, lower the threshold, or pause it. A model that is already loaded stays in VRAM until
+Ollama's keep-alive expires; unload it from the Models page to free VRAM immediately.
+
+## Documents (knowledge)
+
+**"Folder is not allowed on this computer" / `path_not_allowed`**
+Each computer decides which of its folders may be read: `homemesh worker allow-path <folder>` on *that*
+computer, then retry the scan.
+
+**"Refusing to index your whole home folder" / "an entire filesystem"**
+Choose a specific sub-folder. Sensitive locations (`.ssh`, browser profiles, password stores, `.env`) are
+always refused.
+
+**Search is "keyword only"**
+No embedding model is configured or online. `ollama pull nomic-embed-text`, then set Models → Model roles
+→ Embeddings. Existing chunks are embedded automatically (Knowledge → Embed missing).
+
+**PDF shows `needs_ocr`**
+The PDF contains scanned images without a text layer. OCR isn't included in v0.1.0. Run it through an OCR
+tool (e.g. `ocrmypdf`) and rescan.
+
+**Answers don't cite my documents**
+Check that the collection is `indexed` and search finds the passage (Knowledge → Search). Small models
+often ignore context; try a larger chat model. Knowledge retrieval can be turned off per message or in
+Settings.
+
+## Chat and memory
+
+**A reply was "interrupted"**
+The coordinator restarted, or the worker disconnected mid-reply. The partial text is kept. Use
+**Regenerate**. Chat requests are never retried automatically on another computer.
+
+**"Remember that…" didn't save anything**
+Explicit-memory detection can be disabled in Settings → Memory. Very long or very short statements are
+ignored. You can always add memories on the Memory page.
+
+**Tool approval request expired (`approval_closed`)**
+Approvals time out after `tools.approval_timeout_s` (5 minutes). Ask again.
+
+## Database, backups, upgrades
+
+**"The database schema (vN) is newer than this HomeMesh version supports"**
+You started an older HomeMesh on a newer database. Install the newer version again, or restore a backup
+made with this version.
+
+**Database migration failed**
+Startup stops; the failed migration was rolled back, so the database is unchanged. A copy taken before
+migrating is in `data/backups/pre-migration-v<from>-to-v<to>-<time>.sqlite3`. Report the error with the
+log. To return to the previous version: reinstall it; the database is still at the old version.
+
+**Database corruption (`doctor` shows integrity failure)**
+Stop HomeMesh and restore the latest backup: `homemesh restore <file>`. The damaged data folder is kept
+aside as `<data>-pre-restore-<time>`.
+
+**Restore says HomeMesh is running**
+`homemesh stop` first (restore never overwrites live data).
+
+**`backup_decrypt_failed` / "Wrong passphrase"**
+The passphrase is wrong or the file was modified. There is no recovery without the passphrase.
+
+## Windows specifics
+
+* `homemesh stop` asks the process to stop via a stop-request file. If it doesn't stop within 30 s,
+  `homemesh stop --force` terminates it (interrupted jobs are recorded on the next start).
+* If Windows Defender SmartScreen or the firewall prompts when the coordinator first listens on the
+  network, allow **Private** networks only. Workers need no inbound rule.
+* Antivirus software that scans the data folder can slow down SQLite. Excluding the data folder is your
+  decision; HomeMesh never changes Defender settings.
+
+## Getting help
+
+Include `homemesh --json doctor` and relevant parts of `homemesh logs`. Logs contain no message
+contents, but do contain computer names, model names and file paths of indexed documents. Review them
+before sharing.

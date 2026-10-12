@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import codecs
+import contextlib
 import getpass
 import json
 import os
@@ -724,7 +726,33 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+_ASCII_FALLBACK = {"✓": "[ok]", "✗": "[x]", "●": "*", "○": "o", "→": "->", "…": "...", "·": "-", "—": "-",
+                   "\u2013": "-", "≈": "~", "≥": ">=", "≤": "<="}
+
+
+def _ascii_fallback(exc: UnicodeError) -> tuple[str, int]:
+    if not isinstance(exc, UnicodeEncodeError):
+        raise exc
+    text = exc.object[exc.start:exc.end]
+    return "".join(_ASCII_FALLBACK.get(ch, "?") for ch in text), exc.end
+
+
+def _make_output_safe() -> None:
+    """Never crash on output: a Windows console redirected to a file or pipe uses a legacy code
+    page (e.g. cp1252) that cannot encode symbols such as ✓, so map them to ASCII there."""
+    codecs.register_error("homemesh_ascii", _ascii_fallback)
+    for stream in (sys.stdout, sys.stderr):
+        if stream is None:  # pythonw has no console streams
+            continue
+        try:
+            "✓✗●→…".encode(stream.encoding or "ascii")
+        except (UnicodeEncodeError, LookupError):
+            with contextlib.suppress(AttributeError, ValueError):
+                stream.reconfigure(errors="homemesh_ascii")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _make_output_safe()
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "func", None):
@@ -736,6 +764,10 @@ def main(argv: list[str] | None = None) -> int:
         return int(args.func(Ctx(args)) or 0)
     except KeyboardInterrupt:
         return 130
+    except BrokenPipeError:  # output piped into e.g. `head`, which exited early
+        with contextlib.suppress(OSError):
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        return EXIT_OK
     except HomeMeshError as exc:
         print(f"✗ {exc.message}", file=sys.stderr)
         if exc.hint:
