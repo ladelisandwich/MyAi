@@ -11,11 +11,13 @@ A step-by-step setup for this layout:
 The Bazzite machines connect **out** to the Windows PC; they need no open ports. Only the Windows
 PC accepts connections (port 8765, HTTPS, from your home network).
 
-> **What has been tested:** the Windows installer is exercised on GitHub's Windows runners under
-> Windows PowerShell 5.1: install, setup, start, web UI, chat, upgrade and uninstall. The Linux
-> installer, Ollama installer and a real chat run as a normal user inside the official
-> `bazzite-nvidia-open` image, on CPU. Nothing has run on *your* GPUs yet, so step 5 tells you
-> what to check.
+> **What has been tested** (automatically, on every change):
+> * The Windows installer runs on GitHub's Windows runners under Windows PowerShell 5.1, with Python 3.13
+>   and 3.14: install, setup, start, web app, chat, upgrade while running and uninstall.
+> * Inside the official `bazzite-nvidia-open` image, as a normal user: the Ollama installer, the
+>   HomeMesh installer, a **real chat through Ollama** (CPU) and the upgrade.
+>
+> Nothing has run on *your* PCs or GPUs yet. Step 5 tells you what to check.
 
 Total time: about 45 minutes, most of it downloads (Ollama is about 1.4 GB per machine, plus models).
 

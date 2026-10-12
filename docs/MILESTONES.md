@@ -106,7 +106,7 @@ python scripts/bench.py --runs 5 --model <model>     # against a running coordin
 | Migrations: backup first, atomic failure, refuse downgrade | ✅ auto | `tests/unit/test_migrations.py` |
 | CLI: status/doctor/stop work on every OS, including redirected output on Windows | ✅ auto | CI lifecycle step; `test_stop_request_file_triggers_graceful_stop`, `test_cli_output_survives_legacy_console_encoding`, `test_worker_link_reports_protocol_mismatch` |
 | Linux user install + systemd user service | ✅ real (install) · ⚠️ systemd unit not run (no systemd in the container) | Procedure V3 |
-| Bazzite native and Quadlet with NVIDIA CDI | ⚠️ unverified | Procedure V4 (deploy/bazzite/README.md) |
+| Bazzite native and Quadlet with NVIDIA CDI | ✅ auto in the real `bazzite-nvidia-open` image (Python 3.14.8): install.sh, install-ollama.sh, a real CPU chat through Ollama, upgrade while running, uninstall; Quadlet dry-run with its Podman 5.8.7 · ⚠️ not yet on a Bazzite PC with a GPU or under systemd | `install.yml` job *Bazzite*; Procedure V4 |
 | Windows installer and autostart entry | ✅ auto (Windows Server CI, PowerShell 5.1, Python 3.13 + 3.14) · ⚠️ not yet on a Windows 11 desktop | `install.yml` job *Windows installer*; Procedure V5 |
 | Container image | ✅ auto (build, run, health, non-root, UI, chat) · ⚠️ GPU overlay not run | `install.yml` job *Container image*; Procedure V6 |
 | Package layering rules | ✅ auto | `test_layering`, `test_os_specific_code_isolated` |
