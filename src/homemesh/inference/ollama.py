@@ -12,6 +12,7 @@ send prompts outside the home network.
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -55,6 +56,8 @@ def metrics_from_final(chunk: dict[str, Any]) -> GenerationMetrics:
         tokens_per_second=tps,
     )
 
+
+_MISSING_MODEL = re.compile(r"model ['\"]?[^'\"]*['\"]? not found|try pulling it")
 
 class OllamaBackend(InferenceBackend):
     type = "ollama"
@@ -100,7 +103,9 @@ class OllamaBackend(InferenceBackend):
             msg = body
         msg = str(msg).strip() or f"HTTP {status}"
         low = msg.lower()
-        if status == 404 or "not found" in low:
+        # Only Ollama's own "model ... not found" (HTTP 404) means the model is missing. Runner errors can
+        # also contain "not found" (e.g. a library file) and must not be reported as a missing model.
+        if status == 404 or _MISSING_MODEL.search(low):
             return BackendError(f"Model {model!r} is not installed in Ollama: {msg}", code="model_not_found",
                                 hint=f"Download it with 'ollama pull {model}' or from the Models page.",
                                 status_code=404)
@@ -111,6 +116,15 @@ class OllamaBackend(InferenceBackend):
             return BackendError(f"Ollama could not load {model!r}: {msg}", code="insufficient_memory",
                                 hint="Choose a smaller/quantized model, close other GPU applications, or "
                                      "use a node with more memory.")
+        if "llama-server" in low or "llama runner" in low or "runner process" in low:
+            return BackendError(
+                f"Ollama could not start its model runner for {model!r} on this computer: {msg}",
+                code="backend_runner_failed",
+                hint="This is a problem with Ollama on that computer, not with the model download. Check Ollama's "
+                     "server.log (Windows: %LOCALAPPDATA%\\Ollama\\server.log; Linux: journalctl --user -u ollama). "
+                     "Common causes: a GPU driver too old for the card, antivirus or Smart App Control blocking "
+                     "Ollama's files, or a GPU backend that crashes. To test without GPUs, set CUDA_VISIBLE_DEVICES=-1 "
+                     "and OLLAMA_VULKAN=0 for Ollama and restart it.")
         return BackendError(f"Ollama error (HTTP {status}): {msg}", code="backend_http_error")
 
     # ------------------------------------------------------------------ status / models
@@ -325,6 +339,10 @@ class OllamaBackend(InferenceBackend):
             body["keep_alive"] = keep_alive
         try:
             r = await self._client.post("/api/generate", json=body)
+            if r.status_code == 400 and "does not support generate" in r.text:
+                # Embedding-only models cannot be loaded through /api/generate; an empty /api/embed
+                # request loads them (verified against Ollama 0.40.3).
+                r = await self._client.post("/api/embed", json={**body, "input": []})
         except Exception as exc:
             raise self._wrap(exc, f"loading {model}") from exc
         if r.status_code != 200:

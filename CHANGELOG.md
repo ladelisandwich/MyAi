@@ -65,5 +65,9 @@ First working version.
 * `scripts/bench.py` exited 0 when every chat failed; it now waits for a usable model and fails honestly.
 * On mixed-GPU machines the coordinator treated the free memory of only the GPUs that report it
   (on Windows: NVIDIA) as the node's free VRAM; it is now "unknown" unless every counted GPU reports it.
+* Ollama runner failures (`error starting llama-server`, `llama-server process has terminated`) were
+  reported as "model not installed" because any message containing "not found" was treated as a missing
+  model; they are now `backend_runner_failed` with a diagnostic hint. "Load" now works for
+  embedding-only models (Ollama refuses /api/generate for them; HomeMesh loads them via /api/embed).
 * Windows PowerShell 5.1 turned harmless pip/npm stderr output into fatal errors when the installer's
   output was redirected; native calls now rely on exit codes. Python detection finds 3.14-only systems.

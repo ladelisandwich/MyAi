@@ -58,6 +58,17 @@ Start Ollama (`ollama serve`, or its desktop app/system service). If Ollama runs
 `ollama pull llama3.2:3b` on any worker, or Models → Download. The model list refreshes automatically
 (or press Refresh).
 
+**`backend_runner_failed`: "Ollama could not start its model runner"** (`error starting llama-server`, `llama-server process has terminated`)
+Ollama is installed and answers, but cannot start the process that runs models, so *every* model fails,
+even tiny ones. This is an Ollama/driver problem on that computer, not a missing download. Check
+Ollama's own log: Windows `%LOCALAPPDATA%\Ollama\server.log`, Linux `journalctl --user -u ollama`.
+Test outside HomeMesh with `ollama run llama3.2:3b "hello"`. Then narrow it down:
+1. Run Ollama without GPUs: set `CUDA_VISIBLE_DEVICES=-1` and `OLLAMA_VULKAN=0` for your user, quit
+   and restart Ollama, and try again. If it works now, a GPU backend is the problem: update the driver
+   (NVIDIA Maxwell/Pascal cards need driver 570+), or keep the card that fails hidden from Ollama.
+2. If it still fails on CPU, look in Windows Security → Protection history for blocked or quarantined
+   Ollama files (`llama-server.exe`, `ggml-*.dll`). Smart App Control or antivirus can block them.
+
 **`model_not_found` / `model_incompatible`**
 The selected model isn't on any online computer, or lacks a needed capability (e.g. tools, vision,
 embedding). Models → *Model roles* lists only compatible models. Capabilities come from Ollama; for

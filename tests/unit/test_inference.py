@@ -46,6 +46,10 @@ def ollama_handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(404, json={"error": "model 'missing' not found"})
         if body["model"] == "notools":
             return httpx.Response(400, json={"error": "registry.ollama.ai/library/notools does not support tools"})
+        if body["model"] == "runnerdead":  # exact shape returned by Ollama 0.40.3 when its runner cannot start
+            return httpx.Response(500, json={"error": "llama-server process has terminated: exit status 127"})
+        if body["model"] == "runnerstart":  # a runner error that mentions "not found" is NOT a missing model
+            return httpx.Response(500, json={"error": "error starting llama-server: exec: llama-server.exe: file not found"})
         lines = [
             {"model": body["model"], "message": {"role": "assistant", "content": "Hel"}, "done": False},
             {"model": body["model"], "message": {"role": "assistant", "content": "lo"}, "done": False},
@@ -60,6 +64,11 @@ def ollama_handler(request: httpx.Request) -> httpx.Response:
                       "prompt_eval_count": 36, "prompt_eval_duration": 70451000, "eval_count": 9,
                       "eval_duration": 139282000})
         return httpx.Response(200, content="\n".join(json.dumps(x) for x in lines) + "\n")
+    if path == "/api/generate":
+        body = json.loads(request.content)
+        if body["model"] == "nomic-embed-text":
+            return httpx.Response(400, json={"error": '"nomic-embed-text" does not support generate'})
+        return httpx.Response(200, json={"model": body["model"], "response": "", "done": True})
     if path == "/api/embed":
         body = json.loads(request.content)
         return httpx.Response(200, json={"model": body["model"], "embeddings": [[0.1, 0.2]] * len(body["input"]),
@@ -108,7 +117,8 @@ async def test_ollama_tool_calls_parsed(ollama):
 
 
 @pytest.mark.parametrize("model,code", [("missing", "model_not_found"), ("notools", "model_incompatible"),
-                                        ("midfail", "backend_http_error")])
+                                        ("midfail", "backend_http_error"), ("runnerdead", "backend_runner_failed"),
+                                        ("runnerstart", "backend_runner_failed")])
 async def test_ollama_errors_are_classified(ollama, model, code):
     p = ChatJobPayload(model=model, backend="ollama", messages=[ChatMessage(role="user", content="x")])
     with pytest.raises(BackendError) as exc:
@@ -197,3 +207,17 @@ def test_parameter_size_parsing():
     assert parameter_size_to_billions("8.0B") == 8.0
     assert parameter_size_to_billions("134.52M") == pytest.approx(0.13452)
     assert parameter_size_to_billions(None) is None
+
+
+async def test_ollama_load_handles_embedding_only_models():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        return ollama_handler(request)
+
+    b = OllamaBackend("ollama", "http://ollama.test", transport=httpx.MockTransport(handler))
+    await b.load("nomic-embed-text")  # /api/generate says "does not support generate" -> loaded via /api/embed
+    await b.load("llama3.2:3b")
+    assert calls == ["/api/generate", "/api/embed", "/api/generate"]
+    await b.close()
