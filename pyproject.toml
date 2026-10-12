@@ -1,0 +1,85 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "homemesh"
+dynamic = ["version"]
+description = "HomeMesh AI - a self-hosted, local-first personal AI platform that spans the computers in your home."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [{ name = "HomeMesh AI contributors" }]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: Microsoft :: Windows",
+  "Framework :: FastAPI",
+]
+dependencies = [
+  "fastapi>=0.135,<1.0",
+  "pydantic>=2.11,<3",
+  "uvicorn>=0.40,<1.0",
+  "websockets>=15.0",
+  "httpx>=0.28,<1.0",
+  "psutil>=7.0",
+  "argon2-cffi>=25.1",
+  "cryptography>=44",
+  "numpy>=2.0",
+  "pypdf>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=9.0",
+  "pytest-asyncio>=1.0",
+  "ruff>=0.15",
+]
+
+[project.scripts]
+homemesh = "homemesh.cli.main:main"
+
+[tool.hatch.version]
+path = "src/homemesh/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/homemesh"]
+# The built web UI is copied into src/homemesh/web_dist by scripts/build_web.(sh|ps1).
+# It is git-ignored, so it must be listed as a build artifact to be packaged.
+# When missing, the coordinator falls back to apps/web/dist (source checkouts).
+artifacts = ["src/homemesh/web_dist/**"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+  "smoke: requires a real local inference backend (Ollama) - opt in with -m smoke",
+  "slow: slower integration tests",
+]
+addopts = "-m 'not smoke'"
+filterwarnings = [
+  "ignore::DeprecationWarning:websockets.*",
+  "ignore::DeprecationWarning:uvicorn.*",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "ASYNC", "RUF"]
+ignore = [
+  "S101",   # assert is fine in tests and invariants
+  "S104",   # binding 0.0.0.0 is an explicit, guarded configuration choice
+  "S603",   # subprocess calls use fixed argv lists, never shell=True
+  "S607",   # partial executable paths (nvidia-smi, systemctl) resolved via PATH by design
+  "S608",   # SQL is built only from internal constants; values are always bound parameters
+  "RUF012",
+  "B008",   # FastAPI Depends() in defaults
+  "E501",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S108", "S311", "ASYNC"]
