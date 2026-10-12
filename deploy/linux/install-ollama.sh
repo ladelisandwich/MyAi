@@ -35,7 +35,14 @@ say() { printf '\033[1m%s\033[0m\n' "$*"; }
 fail() { printf '\033[31mError:\033[0m %s\n' "$*" >&2; exit 1; }
 
 [ "$(uname -m)" = "x86_64" ] || fail "This script supports x86_64 only (found $(uname -m))."
-command -v zstd >/dev/null 2>&1 || fail "zstd is needed to unpack the archive (Bazzite and Fedora include it; Ubuntu: sudo apt install zstd)."
+# Decompressor: the zstd command, or Python 3.14+'s built-in compression.zstd module.
+if command -v zstd >/dev/null 2>&1; then
+  unzstd() { zstd -dc "$1"; }
+elif python3 -c "import compression.zstd" >/dev/null 2>&1; then
+  unzstd() { python3 -c "import shutil, sys, compression.zstd as z; shutil.copyfileobj(z.open(sys.argv[1], 'rb'), sys.stdout.buffer, 1 << 20)" "$1"; }
+else
+  fail "Need the 'zstd' command or Python 3.14+ to unpack the archive (Fedora/Ubuntu package: zstd)."
+fi
 command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is missing (coreutils)."
 
 BASE="${XDG_DATA_HOME:-$HOME/.local/share}/ollama"
@@ -70,7 +77,7 @@ ACTUAL="$(sha256sum "$ARCHIVE" | awk '{print $1}')"
 say "Unpacking into $DEST…"
 rm -rf "$DEST.partial"
 mkdir -p "$DEST.partial"
-zstd -dc "$ARCHIVE" | tar -x -C "$DEST.partial" --no-same-owner
+unzstd "$ARCHIVE" | tar -x -C "$DEST.partial" --no-same-owner
 [ -x "$DEST.partial/bin/ollama" ] || fail "The archive did not contain bin/ollama."
 rm -rf "$DEST"
 mv "$DEST.partial" "$DEST"

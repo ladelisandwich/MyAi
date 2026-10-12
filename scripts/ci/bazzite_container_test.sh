@@ -7,7 +7,8 @@ python3 -VV
 ls /usr/bin/python3* | tr '\n' ' '; echo
 python3 -c "import venv, sqlite3; sqlite3.connect(':memory:').execute('create virtual table t using fts5(x)'); print('venv + sqlite FTS5 OK, sqlite', sqlite3.sqlite_version)"
 podman --version
-command -v brew node npm nvidia-smi firewall-cmd || true
+command -v brew node npm nvidia-smi firewall-cmd zstd git curl || true
+python3 -c 'import compression.zstd' 2>/dev/null && echo 'python3 has compression.zstd' || true
 
 useradd -m tester
 cp -r /src /home/tester/homemesh

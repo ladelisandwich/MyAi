@@ -176,6 +176,10 @@ gh repo clone ladelisandwich/MyAi ~/homemesh -- --branch claude/stoic-bohr-fkoz0
 cd ~/homemesh
 ```
 
+No `brew`? Use the browser instead. Open the repository on github.com, switch to the branch
+`claude/stoic-bohr-fkoz0p`, choose **Code → Download ZIP**, and extract it to `~/homemesh`. The commands
+below use `bash …`, so they work from a ZIP too.
+
 ### 2.3 Install Ollama (per user, checksum-verified)
 
 ```bash
