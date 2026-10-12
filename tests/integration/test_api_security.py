@@ -114,7 +114,7 @@ async def test_validation_errors_are_readable(h):
     assert r.status_code == 422 and "content" in r.json()["error"]["message"]
 
 
-async def test_cross_user_isolation_by_id(h):
+async def test_unknown_ids_and_path_traversal_are_rejected(h):
     c = await h.owner_client()
     r = await c.get("/api/v1/conversations/conv_doesnotexist")
     assert r.status_code == 404
