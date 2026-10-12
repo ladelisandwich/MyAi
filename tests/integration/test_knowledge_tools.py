@@ -3,6 +3,7 @@ and the tool approval workflow."""
 
 import asyncio
 import json
+import os
 
 import pytest
 
@@ -208,7 +209,8 @@ async def test_tool_arguments_are_validated(h):
     await h.add_worker("desk", models={"mock-chat": ["completion", "tools"]}, allowed_tools=["read_file"])
     c = h.client
     conv = (await c.post("/api/v1/conversations", json={})).json()
-    events = await _chat_with_approval(c, conv["id"], '[[mock:tool:read_file {"path": "/etc/shadow"}]]', decide=None)
+    outside = json.dumps(os.path.abspath("/etc/shadow"))  # absolute on every OS (C:\\etc\\shadow on Windows)
+    events = await _chat_with_approval(c, conv["id"], f'[[mock:tool:read_file {{"path": {outside}}}]]', decide=None)
     res = dict(events)["tool_result"]["result"]
     assert res["ok"] is False and ("not allowed" in res["error"] or "No folders" in res["error"]
                                    or "outside" in res["error"])

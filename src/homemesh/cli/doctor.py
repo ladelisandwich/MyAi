@@ -21,6 +21,7 @@ import httpx
 from homemesh.common.config import HomeMeshConfig, load_config
 from homemesh.common.errors import ConfigError
 from homemesh.common.paths import AppPaths
+from homemesh.version import SUPPORTED_PROTOCOL_VERSIONS
 
 OK, WARN, FAIL, INFO = "ok", "warn", "fail", "info"
 
@@ -216,7 +217,14 @@ def _worker_link(cfg: HomeMeshConfig, paths: AppPaths) -> Check:
         verify = ssl.create_default_context(cafile=creds.ca_file) if creds.ca_file else ssl.create_default_context()
     try:
         r = httpx.get(creds.coordinator_url + "/api/v1/system/health", timeout=8, verify=verify, trust_env=False)
-        return Check("Coordinator link", OK, f"{creds.coordinator_url} reachable (version {r.json().get('version')}), "
+        health = r.json()
+        theirs = health.get("protocol_version")
+        if theirs not in SUPPORTED_PROTOCOL_VERSIONS:
+            return Check("Coordinator link", FAIL,
+                         f"coordinator {health.get('version')} speaks protocol v{theirs}; this worker supports "
+                         f"{list(SUPPORTED_PROTOCOL_VERSIONS)}",
+                         "Upgrade HomeMesh so both computers run compatible versions (coordinator first).")
+        return Check("Coordinator link", OK, f"{creds.coordinator_url} reachable (version {health.get('version')}), "
                                              f"node {creds.node_id}")
     except ssl.SSLError as exc:
         return Check("Coordinator link", FAIL, f"TLS verification failed: {exc}",

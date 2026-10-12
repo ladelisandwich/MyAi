@@ -1,6 +1,7 @@
 """Coordinator restart: workers reconnect, data persists, interrupted work is reconciled honestly."""
 
 import sqlite3
+from contextlib import closing
 
 import pytest
 
@@ -24,7 +25,7 @@ async def test_restart_preserves_data_and_workers_reconnect(tmp_path):
     assert w.agent.state in ("reconnecting", "connecting")
 
     # Simulate work that was in flight when the coordinator died uncleanly.
-    with sqlite3.connect(h.paths.db_file) as db:
+    with closing(sqlite3.connect(h.paths.db_file, isolation_level=None)) as db:
         db.execute("INSERT INTO messages(id, conversation_id, role, content, status, created_at, updated_at)"
                    " VALUES ('msg_crash', ?, 'assistant', 'half an ans', 'streaming', 'z', 'z')", (conv["id"],))
         for jid, jtype, idem in (("job_chat", "chat", 0), ("job_embed", "embed", 1)):

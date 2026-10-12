@@ -25,6 +25,7 @@ the coordinator is running.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import io
 import json
@@ -260,7 +261,9 @@ def _extract(path: Path, work: Path, passphrase: str | None) -> Path:
         if not f.is_file() or _sha256(f) != digest:
             raise BackupError(f"Backup file {rel} is missing or its checksum does not match (corrupted backup).",
                               code="backup_corrupt")
-    with sqlite3.connect(str(out / "db" / "homemesh.sqlite3")) as conn:
+    # closing(): a sqlite3 connection used as a context manager only commits, it does not close.
+    # An open handle would keep the file locked on Windows (cleanup/restore would then fail).
+    with contextlib.closing(sqlite3.connect(str(out / "db" / "homemesh.sqlite3"))) as conn:
         if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
             raise BackupError("The database inside the backup failed its integrity check.", code="backup_corrupt")
     return out

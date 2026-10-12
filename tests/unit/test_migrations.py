@@ -1,4 +1,5 @@
 import sqlite3
+from contextlib import closing
 
 import pytest
 
@@ -41,7 +42,7 @@ def test_pre_migration_backup_and_atomic_failure(tmp_path, monkeypatch):
     assert mig.migrate(c, tmp_path / "backups") == [good.version]
     backups = list((tmp_path / "backups").glob("pre-migration-*.sqlite3"))
     assert len(backups) == 1
-    with sqlite3.connect(backups[0]) as b:
+    with closing(sqlite3.connect(backups[0], isolation_level=None)) as b:
         assert b.execute("SELECT username FROM users").fetchone()[0] == "o"
     bad = mig.Migration(good.version + 1, "broken", "CREATE TABLE ok_table(x INT);\nTHIS IS NOT SQL;")
     monkeypatch.setattr(mig, "load_migrations", lambda: [*real, good, bad])

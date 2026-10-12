@@ -2,6 +2,7 @@
 
 import asyncio
 import sqlite3
+from contextlib import closing
 
 import httpx
 import pytest
@@ -45,7 +46,7 @@ async def test_enrollment_rejects_bad_reused_and_expired_codes(h, tmp_path):
     with pytest.raises(AuthError, match="already used"):
         await asyncio.to_thread(join, h.base_url, code, p, node_name="second")
     code2 = await h.pairing_code()
-    with sqlite3.connect(h.paths.db_file) as db:
+    with closing(sqlite3.connect(h.paths.db_file, isolation_level=None)) as db:
         db.execute("UPDATE pairing_tokens SET expires_at='2000-01-01T00:00:00.000Z' WHERE used_at IS NULL")
     with pytest.raises(AuthError, match="expired"):
         await asyncio.to_thread(join, h.base_url, code2, p, node_name="late")

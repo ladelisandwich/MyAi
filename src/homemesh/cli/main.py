@@ -626,7 +626,7 @@ def build_parser() -> argparse.ArgumentParser:
     lg.set_defaults(func=cmd_logs)
     sub.add_parser("version", help="print version information").set_defaults(func=cmd_version)
 
-    sv = sub.add_parser("service", help="install/uninstall autostart (systemd user unit / Windows logon task)")
+    sv = sub.add_parser("service", help="install/uninstall autostart (systemd user unit / Windows per-user autostart entry)")
     sv.add_argument("action", choices=["install", "uninstall", "status"])
     sv.set_defaults(func=cmd_service)
 

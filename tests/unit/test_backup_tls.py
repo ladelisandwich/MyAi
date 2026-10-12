@@ -2,6 +2,7 @@ import socket
 import sqlite3
 import ssl
 import threading
+from contextlib import closing
 
 import pytest
 
@@ -31,7 +32,7 @@ def _seed(paths, text="hello"):
 
 
 def _messages(paths):
-    with sqlite3.connect(paths.db_file) as c:
+    with closing(sqlite3.connect(paths.db_file, isolation_level=None)) as c:
         return [r[0] for r in c.execute("SELECT content FROM messages")]
 
 
@@ -41,7 +42,7 @@ def test_backup_restore_round_trip(home):
     assert set(info.manifest["includes"]) >= {"database", "config", "attachments"}
     assert verify_backup(info.path)["schema_version"] >= 1
     # change data after the backup
-    with sqlite3.connect(home.db_file) as c:
+    with closing(sqlite3.connect(home.db_file, isolation_level=None)) as c:
         c.execute("UPDATE messages SET content='changed'")
     home.config_file.write_text("[node]\nname = \"changed\"\n")
     res = restore_backup(info.path, home)
@@ -52,7 +53,7 @@ def test_backup_restore_round_trip(home):
     from pathlib import Path
 
     aside = Path(res["previous_data_moved_to"])
-    with sqlite3.connect(aside / "homemesh.sqlite3") as c:
+    with closing(sqlite3.connect(aside / "homemesh.sqlite3", isolation_level=None)) as c:
         assert c.execute("SELECT content FROM messages").fetchone()[0] == "changed"
 
 
