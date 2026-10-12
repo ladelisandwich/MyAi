@@ -95,10 +95,12 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
           docker system prune -af >/dev/null
           df -h /
+      # Podman, not Docker: Bazzite's bootc image has more layers than Docker's overlay driver
+      # allows ("max depth exceeded"). Rootful so the image's many file owners map cleanly.
       - name: Pull ghcr.io/ublue-os/bazzite-nvidia-open:stable
-        run: docker pull ghcr.io/ublue-os/bazzite-nvidia-open:stable
+        run: sudo podman pull --quiet ghcr.io/ublue-os/bazzite-nvidia-open:stable
       - name: Test inside Bazzite
-        run: docker run --rm -v "$PWD:/src:ro" ghcr.io/ublue-os/bazzite-nvidia-open:stable bash /src/scripts/ci/bazzite_container_test.sh
+        run: sudo podman run --rm -v "$PWD:/src:ro" ghcr.io/ublue-os/bazzite-nvidia-open:stable bash /src/scripts/ci/bazzite_container_test.sh
 
   container:
     name: Container image build and run
