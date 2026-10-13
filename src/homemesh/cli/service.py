@@ -19,7 +19,7 @@ import sys
 import time
 from pathlib import Path
 
-from homemesh.common.instance import lock_is_held, read_pid_record
+from homemesh.common.instance import lock_is_held, pid_record_ready, read_pid_record
 from homemesh.common.paths import AppPaths
 from homemesh.common.proc import run_quiet
 
@@ -183,11 +183,14 @@ def start(paths: AppPaths) -> str:
         kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
     else:
         kwargs["start_new_session"] = True
-    subprocess.Popen([_python_for_service(), "-m", "homemesh", "run"], **kwargs)
-    for _ in range(50):
+    child = subprocess.Popen([_python_for_service(), "-m", "homemesh", "run"], **kwargs)
+    for _ in range(150):  # up to 30 s: the first start after an upgrade also migrates the database
         time.sleep(0.2)
-        if read_pid(paths):
+        if read_pid(paths) and pid_record_ready(paths.pid_file):
             return f"Started in the background (logs: {paths.logs_dir / 'homemesh.log'})."
+        if child.poll() is not None:
+            return (f"HomeMesh exited right away (code {child.returncode}). See {paths.logs_dir / 'console.log'} "
+                    f"and {paths.logs_dir / 'homemesh.log'}, or run 'homemesh run' to see the error.")
     return (f"Started; it is taking a while to come up - check {paths.logs_dir / 'homemesh.log'} "
             f"and {paths.logs_dir / 'console.log'}.")
 

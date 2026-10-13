@@ -88,6 +88,7 @@ async def _run_locked(cfg: HomeMeshConfig, paths: AppPaths, roles: list[str], in
     server: uvicorn.Server | None = None
     agent = None
     tasks: list[asyncio.Task[object]] = []
+    background: list[asyncio.Task[object]] = []  # helpers whose end does not mean "shut down"
     stop = stop_event or asyncio.Event()
 
     if "coordinator" in roles:
@@ -104,6 +105,17 @@ async def _run_locked(cfg: HomeMeshConfig, paths: AppPaths, roles: list[str], in
         server = uvicorn.Server(uv_cfg)
         server.install_signal_handlers = lambda: None  # type: ignore[method-assign]  # we handle signals
         tasks.append(asyncio.create_task(server.serve(), name="uvicorn"))
+
+        async def mark_ready() -> None:
+            # 'homemesh start' waits for this, so the next command can already talk to the coordinator.
+            # uvicorn exposes no "started" event; poll its flag (the first start may run migrations).
+            for _ in range(6000):
+                if server.started:  # type: ignore[union-attr]
+                    write_pid_record(paths.pid_file, ready=True)
+                    return
+                await asyncio.sleep(0.05)
+
+        background.append(asyncio.create_task(mark_ready(), name="mark-ready"))
 
         if "worker" in roles:
             async def start_embedded_worker() -> None:
@@ -135,6 +147,7 @@ async def _run_locked(cfg: HomeMeshConfig, paths: AppPaths, roles: list[str], in
             log.error("%s %s", exc.message, exc.hint or "")
             return 2
         tasks.append(asyncio.create_task(agent.run(), name="worker"))
+        write_pid_record(paths.pid_file, ready=True)
     else:
         log.error("Nothing to run: this computer is configured for roles %s. The 'client' role only needs a "
                   "browser pointed at the coordinator.", roles)
@@ -168,6 +181,8 @@ async def _run_locked(cfg: HomeMeshConfig, paths: AppPaths, roles: list[str], in
                 await asyncio.wait_for(t, timeout=15)
     stopper.cancel()
     watcher.cancel()
+    for t in background:
+        t.cancel()
     return exit_code
 
 

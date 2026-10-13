@@ -86,12 +86,21 @@ def _create_time(pid: int) -> float | None:
         return None
 
 
-def write_pid_record(path: Path, pid: int | None = None) -> None:
+def write_pid_record(path: Path, pid: int | None = None, *, ready: bool = False) -> None:
+    """``ready`` is set once the process serves requests (``homemesh start`` waits for it)."""
     pid = pid or os.getpid()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps({"pid": pid, "started": _create_time(pid)}), encoding="utf-8")
+    tmp.write_text(json.dumps({"pid": pid, "started": _create_time(pid), "ready": ready}), encoding="utf-8")
     os.replace(tmp, path)
+
+
+def pid_record_ready(path: Path) -> bool:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and data.get("ready") is True
 
 
 def read_pid_record(path: Path) -> int | None:
