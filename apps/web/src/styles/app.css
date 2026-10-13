@@ -187,6 +187,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .badge.ok { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
 .badge.warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
 .warn-text { color: var(--warn); }
+pre.block.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
 .badge.danger { background: var(--danger-soft); color: var(--danger); border-color: transparent; }
 .badge.accent { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
 .badge.violet { background: var(--violet-soft); color: var(--violet); border-color: transparent; }

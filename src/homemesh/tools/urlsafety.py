@@ -92,24 +92,27 @@ def normalize_url(url: str) -> str:
         ip = ipaddress.ip_address(host)
     except ValueError:
         ip = None
-    if ip is None and re.fullmatch(r"[0-9a-fx.]+", host) and re.search(r"\d", host.rsplit(".", 1)[-1]):
-        # Browsers read "2130706433", "0x7f.1" or "127.1" as IPv4 addresses (WHATWG URL IPv4
-        # parser); write them out so the approval card shows the address that is really used.
+    if ip is None:
         try:
-            ip = ipaddress.IPv4Address(socket.inet_aton(host))
-        except OSError as exc:
+            # IDNA 2008 with UTS #46 mapping, as browsers and httpx do ("faß.de" stays a different
+            # name from "fass.de"; Python's built-in "idna" codec is the older IDNA 2003). Mapping
+            # comes first, so fullwidth digits or zero-width characters can't hide an IP address.
+            ascii_host = idna.encode(host, uts46=True).decode("ascii").lower().rstrip(".")
+        except (idna.IDNAError, UnicodeError) as exc:
             raise UnsafeURL("the link has an invalid host name") from exc
+        if re.fullmatch(r"[0-9a-fx.]+", ascii_host) and re.search(r"\d", ascii_host.rsplit(".", 1)[-1]):
+            # Browsers read "2130706433", "0x7f.1" or "127.1" as IPv4 addresses (WHATWG URL IPv4
+            # parser); write them out so the approval card shows the address that is really used.
+            try:
+                ip = ipaddress.IPv4Address(socket.inet_aton(ascii_host))
+            except OSError as exc:
+                raise UnsafeURL("the link has an invalid host name") from exc
+        elif not ascii_host or len(ascii_host) > 253 or not all(
+                _LABEL.fullmatch(label) for label in ascii_host.split(".")):
+            raise UnsafeURL("the link has an invalid host name")
     if ip is not None:
         host_out = f"[{ip.compressed}]" if ip.version == 6 else ip.compressed
     else:
-        try:
-            # IDNA 2008 with UTS #46 mapping, as browsers and httpx do ("faß.de" stays a different
-            # name from "fass.de"; Python's built-in "idna" codec is the older IDNA 2003).
-            ascii_host = idna.encode(host, uts46=True).decode("ascii").lower()
-        except (idna.IDNAError, UnicodeError) as exc:
-            raise UnsafeURL("the link has an invalid host name") from exc
-        if len(ascii_host) > 253 or not all(_LABEL.fullmatch(label) for label in ascii_host.split(".")):
-            raise UnsafeURL("the link has an invalid host name")
         host_out = ascii_host
     netloc = host_out if port in (None, _DEFAULT_PORTS[scheme]) else f"{host_out}:{port}"
     path = quote(parts.path or "/", safe=_SAFE_PATH)

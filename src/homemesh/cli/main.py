@@ -99,14 +99,22 @@ def cmd_run(ctx: Ctx) -> int:
     return run_foreground(ctx.cfg, ctx.paths, roles)
 
 
+def _not_set_up(ctx: Ctx, what: str) -> int | None:
+    """Refuse commands that would otherwise create a default (coordinator + worker) configuration on a
+    computer that was never set up, and then start it."""
+    if ctx.paths.config_file.exists():
+        return None
+    print(f"✗ HomeMesh is not set up on this computer yet, so there is nothing to {what}.\n"
+          "  Worker: run the 'homemesh worker join …' line that 'homemesh node pair' prints on the coordinator.\n"
+          "  Coordinator or single computer: run 'homemesh setup'.")
+    return EXIT_USAGE
+
+
 def cmd_start(ctx: Ctx) -> int:
     from homemesh.cli import service
 
-    if not ctx.paths.config_file.exists():
-        print("✗ HomeMesh is not set up on this computer yet, so there is nothing to start.\n"
-              "  Worker: run the 'homemesh worker join …' line that 'homemesh node pair' prints on the coordinator.\n"
-              "  Coordinator or single computer: run 'homemesh setup'.")
-        return EXIT_USAGE
+    if (code := _not_set_up(ctx, "start")) is not None:
+        return code
     print(service.start(ctx.paths))
     return EXIT_OK
 
@@ -121,6 +129,8 @@ def cmd_stop(ctx: Ctx) -> int:
 def cmd_restart(ctx: Ctx) -> int:
     from homemesh.cli import service
 
+    if (code := _not_set_up(ctx, "restart")) is not None:
+        return code
     print(service.stop(ctx.paths, force=ctx.args.force))
     if service.read_pid(ctx.paths):
         return EXIT_ERROR
@@ -322,6 +332,9 @@ def cmd_worker(ctx: Ctx) -> int:
         print("Removed local credentials." if leave(ctx.paths) else "This computer was not joined.")
         print("Also remove it on the coordinator (Computers page or 'homemesh node revoke').")
         return EXIT_OK
+    if a.action in ("allow-path", "disallow-path", "allow-tool", "disallow-tool") and (
+            code := _not_set_up(ctx, "configure")) is not None:
+        return code
     if a.action == "allow-path":
         from homemesh.knowledge.pathsafety import validate_new_root
 
@@ -384,6 +397,8 @@ def cmd_web(ctx: Ctx) -> int:
     a = ctx.args
     cfg = ctx.cfg
     if a.action == "set-searxng":
+        if (code := _not_set_up(ctx, "configure")) is not None:
+            return code
         url = "" if a.url.lower() in ("none", "off", "") else a.url
         try:
             cfg.web.searxng_url = url

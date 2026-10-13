@@ -184,6 +184,9 @@ class ToolService:
             timeout_s = (await self.settings.section("tools"))["approval_timeout_s"]
             conn = self.nodes.get(node_id) if node_id else None
             details: dict[str, Any] = {"node_name": conn.name if conn else None}
+            if isinstance(args.get("url"), str):
+                # The site on its own line: on a phone a long link can hide where it really goes.
+                details["site"] = urlsplit(args["url"]).hostname
             if reason:
                 details["reason"] = reason
             if tool.approval_note:

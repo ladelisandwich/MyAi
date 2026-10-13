@@ -38,8 +38,10 @@ online, and only models with tool support (the **tools** capability on the Model
   conversation, or that a **search result** (or an earlier fetch itself) supplied, and of those only
   3 per answer and one per site. Links found *on* a page, changed addresses (extra path, query,
   slashes) and everything else show an **Approve / Deny** card with the reason first.
-* **Opening links always asks.** `open_url` is an action on your desktop, so it shows the exact link
-  and the computer name and waits for **Approve**. Only `http://` and `https://` links are accepted
+* **Opening links always asks.** `open_url` is an action on your desktop, so it shows the exact link,
+  the site on its own line (a long link can't hide where it goes) and the computer name, and waits for
+  **Approve**. Links written in tricky ways (fullwidth digits, invisible characters, `0x7f.1`) are shown
+  as the real address they lead to. Only `http://` and `https://` links are accepted
   (never files, programs, `javascript:` or Windows settings links), and links into your own network are
   marked as such on the card.
 * **Web content is data, not instructions.** Search results and pages are handed to the model as
@@ -71,7 +73,9 @@ This needs no root and changes nothing outside your home folder. It writes
 random secret key) and a Podman Quadlet user service `homemesh-searxng` (container image pinned to one
 SearXNG build, published on `127.0.0.1:8888` only, running as your user, not root, with a read-only
 file system and no extra privileges). It downloads the image (about 100 MB), starts it, and checks
-that it answers. It then starts whenever you log in. Another port: `--port 8899`.
+that it answers. It then starts whenever you log in. Another port: `--port 8899` (running the script
+again later keeps the port you chose). `--configure` only works on a computer where HomeMesh is
+already set up (joined).
 
 ### 2. Let HomeMesh on the Bazzite desktop use it
 
@@ -148,7 +152,8 @@ image and cache volume are kept until you delete them (the script prints how). T
 * Search engines sometimes rate-limit or show a CAPTCHA to SearXNG; the result then lists them under
   `unresponsive_engines`, and the other engines still answer.
 * `open_url` opens a page; it cannot click, type or read what the browser shows afterwards.
-* On Linux, `open_url` needs HomeMesh to run inside the graphical desktop session (it uses `xdg-open`).
+* On Linux, `open_url` needs a graphical desktop session for that user (it uses `xdg-open`; when HomeMesh
+  was started by systemd before the desktop, it goes through the user manager with `systemd-run --user`).
 
 ## What has been tested
 

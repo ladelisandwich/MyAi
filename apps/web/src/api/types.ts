@@ -320,7 +320,7 @@ export interface Approval {
   id: string;
   tool_name: string;
   arguments_json: Record<string, unknown>;
-  details_json?: { node_name?: string | null; reason?: string; note?: string } | null;
+  details_json?: { node_name?: string | null; site?: string | null; reason?: string; note?: string } | null;
   node_id?: string | null;
   conversation_id?: string | null;
   side_effect: string;

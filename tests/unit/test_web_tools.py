@@ -37,6 +37,17 @@ def test_normalize_url_accepts_and_canonicalises(raw, expected):
     assert normalize_url(raw) == expected
 
 
+@pytest.mark.parametrize(("raw", "expected"), [
+    ("http://0x7f.1\u200b:11434/api/tags", "http://127.0.0.1:11434/api/tags"),  # zero-width space
+    ("http://0xc0.0xa8.1.1\u00ad/admin", "http://192.168.1.1/admin"),  # soft hyphen
+    ("http://\uff11\uff12\uff17.0.0.1/", "http://127.0.0.1/"),  # fullwidth digits
+    ("http://127\u30020.0.1/", "http://127.0.0.1/"),  # ideographic full stop
+])
+def test_hidden_ip_addresses_are_written_out_and_normalising_is_stable(raw, expected):
+    assert normalize_url(raw) == expected
+    assert normalize_url(expected) == expected
+
+
 @pytest.mark.parametrize("raw", [
     "youtube.com", "file:///C:/Windows/System32/calc.exe", "javascript:alert(1)", "ms-settings:", "search-ms:query=x",
     "https:example.com", "https://user:pw@example.com/", "https://example.com\\@evil.com", "\\\\server\\share",
@@ -405,18 +416,30 @@ async def test_open_in_browser_on_windows_uses_the_shell_open_verb(monkeypatch):
     assert calls == ["https://www.youtube.com/"]
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="uses a POSIX shell script as a stand-in for xdg-open")
-async def test_open_in_browser_on_linux_needs_a_desktop_session(monkeypatch, tmp_path):
+@pytest.mark.skipif(sys.platform == "win32", reason="uses POSIX shell scripts as stand-ins for xdg-open/systemd-run")
+async def test_open_in_browser_on_linux_uses_the_desktop_session(monkeypatch, tmp_path):
     monkeypatch.setattr(desktop.sys, "platform", "linux")
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
-    with pytest.raises(desktop.BrowserUnavailable, match="graphical desktop"):
-        await desktop.open_in_browser("https://example.com/")
     log = tmp_path / "opened.txt"
     opener = tmp_path / "xdg-open"
-    opener.write_text(f'#!/bin/sh\nprintf "%s" "$1" > "{log}"\nexit "${{FAKE_EXIT:-0}}"\n')
+    opener.write_text(f'#!/bin/sh\nprintf "%s" "$*" >> "{log}"\nexit "${{FAKE_EXIT:-0}}"\n')
     opener.chmod(0o755)
+    runner = tmp_path / "systemd-run"  # stand-in: records that it was used, then runs the command
+    runner.write_text(f'#!/bin/sh\nprintf "via-user-manager " >> "{log}"\nwhile [ "$1" != "--" ]; do shift; done\n'
+                      'shift\nexec "$@"\n')
+    runner.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path))
+    # No display anywhere: say so.
+    monkeypatch.setattr(desktop, "_user_manager_has_desktop", lambda: False)
+    with pytest.raises(desktop.BrowserUnavailable, match="no graphical desktop"):
+        await desktop.open_in_browser("https://example.com/")
+    # Autostarted service without a display, desktop running: go through the user manager.
+    monkeypatch.setattr(desktop, "_user_manager_has_desktop", lambda: True)
+    assert await desktop.open_in_browser("https://example.com/x") == "default browser"
+    assert log.read_text() == "via-user-manager https://example.com/x"
+    # Started inside the desktop session: xdg-open directly.
+    log.unlink()
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
     assert await desktop.open_in_browser("https://example.com/a?b=1") == "default browser"
     assert log.read_text() == "https://example.com/a?b=1"
@@ -477,11 +500,20 @@ def test_web_tools_are_not_allowed_anywhere_by_default():
 
 def test_cli_allow_tool_and_set_searxng(tmp_path, monkeypatch, capsys):
     from homemesh.cli.main import main
-    from homemesh.common.config import load_config
+    from homemesh.common.config import HomeMeshConfig, load_config, save_config
     from homemesh.common.paths import default_paths
 
     monkeypatch.delenv("HOMEMESH_SEARXNG_URL", raising=False)
     home = ["--home", str(tmp_path)]
+    # Not set up yet: nothing is written (no default coordinator config appears), nothing starts.
+    for cmd in (["web", "set-searxng", "http://127.0.0.1:8888"], ["worker", "allow-tool", "web_search"],
+                ["restart"]):
+        assert main([*home, *cmd]) == 2
+        assert "not set up on this computer yet" in capsys.readouterr().out
+    assert not default_paths(tmp_path).config_file.exists()
+    cfg = HomeMeshConfig()
+    cfg.node.roles = ["worker"]
+    save_config(cfg, default_paths(tmp_path).config_file)
     assert main([*home, "worker", "allow-tool", "shell"]) == 2
     assert "not a tool that runs on a computer" in capsys.readouterr().out
     assert main([*home, "worker", "allow-tool", "web_search"]) == 0

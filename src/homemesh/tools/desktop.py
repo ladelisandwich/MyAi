@@ -7,8 +7,10 @@ the string is always ``http://`` or ``https://`` followed by printable ASCII. No
   browser registered for them. HomeMesh runs in the signed-in user's session, so the browser
   opens on that user's desktop.
 * macOS: ``open``.
-* Linux: ``xdg-open``, which needs a graphical session (``WAYLAND_DISPLAY`` or ``DISPLAY``); a
-  HomeMesh started without one (for example over SSH) reports that instead of guessing.
+* Linux: ``xdg-open`` in the user's graphical session. A HomeMesh started by systemd before the
+  desktop (autostart) has no display in its environment, so the opener is started through the user
+  manager (``systemd-run --user``), which knows the desktop's environment. Without any desktop
+  session it says so instead of guessing.
 """
 
 from __future__ import annotations
@@ -20,13 +22,25 @@ import subprocess
 import sys
 import threading
 
-from homemesh.common.proc import spawn_quiet
+from homemesh.common.proc import run_quiet, spawn_quiet
 
 LAUNCH_WAIT_S = 10.0
 
 
 class BrowserUnavailable(OSError):
     pass
+
+
+def _user_manager_has_desktop() -> bool:
+    if shutil.which("systemd-run") is None or shutil.which("systemctl") is None:
+        return False
+    try:
+        r = run_quiet(["systemctl", "--user", "show-environment"], capture_output=True, text=True, timeout=5,
+                      check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0 and any(line.startswith(("WAYLAND_DISPLAY=", "DISPLAY="))
+                                     for line in r.stdout.splitlines())
 
 
 async def open_in_browser(url: str) -> str:
@@ -39,13 +53,19 @@ async def open_in_browser(url: str) -> str:
     if sys.platform == "darwin":
         cmd = ["open", url]
     else:
-        if not (os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY")):
-            raise BrowserUnavailable("HomeMesh on this computer is not running inside a graphical desktop session, "
-                                     "so it cannot open a browser here")
         opener = shutil.which("xdg-open")
         if opener is None:
             raise BrowserUnavailable("xdg-open is not installed on this computer")
-        cmd = [opener, url]
+        if os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY"):
+            cmd = [opener, url]
+        elif await asyncio.to_thread(_user_manager_has_desktop):
+            # Started as a systemd user service before the desktop session existed, HomeMesh's own
+            # environment has no display; the user manager learns it when the desktop starts.
+            # systemd-run starts the opener there, in the desktop's environment.
+            cmd = ["systemd-run", "--user", "--collect", "--quiet", "--", opener, url]
+        else:
+            raise BrowserUnavailable("no graphical desktop session is running for this user on this computer, "
+                                     "so HomeMesh cannot open a browser here")
     proc = spawn_quiet(cmd, start_new_session=True)
     try:
         code = await asyncio.to_thread(proc.wait, LAUNCH_WAIT_S)

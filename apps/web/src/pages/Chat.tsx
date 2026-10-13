@@ -21,7 +21,7 @@ interface RouteInfo {
 }
 
 interface ToolEvent { name: string; arguments: Record<string, unknown>; ok?: boolean; result?: unknown; running: boolean }
-interface ApprovalEvent { approval_id: string; tool: string; arguments: Record<string, unknown>; side_effect: string; description?: string; node_name?: string | null; reason?: string; note?: string; decided?: "approved" | "denied" }
+interface ApprovalEvent { approval_id: string; tool: string; arguments: Record<string, unknown>; side_effect: string; description?: string; node_name?: string | null; site?: string | null; reason?: string; note?: string; decided?: "approved" | "denied" }
 
 interface Live {
   streaming: boolean;
@@ -128,9 +128,10 @@ function AssistantMessage({ m, isLast, onRegenerate, onApprove }: {
         <div key={a.approval_id} className="approval">
           <div><strong>Approval needed:</strong> the assistant wants to run <code>{a.tool}</code> ({a.side_effect}){a.node_name ? <> on <strong>{a.node_name}</strong></> : null}.</div>
           {a.description && <div className="small muted">{a.description}</div>}
+          {a.site && <div>Site: <strong>{a.site}</strong></div>}
           {a.reason && <div className="small">{a.reason}</div>}
           {a.note && <div className="small warn-text">{a.note}</div>}
-          <pre className="block" style={{ margin: "6px 0" }}>{JSON.stringify(a.arguments, null, 2)}</pre>
+          <pre className="block wrap" style={{ margin: "6px 0" }}>{JSON.stringify(a.arguments, null, 2)}</pre>
           {a.decided ? <Badge kind={a.decided === "approved" ? "ok" : "danger"}>{a.decided}</Badge> : (
             <div className="row">
               <button className="btn ok solid sm" onClick={() => onApprove(a.approval_id, true)}>Approve</button>

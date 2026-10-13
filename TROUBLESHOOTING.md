@@ -222,9 +222,15 @@ and corporate proxies). HomeMesh never skips certificate checks.
 The model wants an address that you didn't give and no search result contained. Approve if the link
 looks right, deny otherwise (see "No silent data leaks" in WEB_ACCESS.md).
 
-**`open_url`: "not running inside a graphical desktop session"** (Linux)
-HomeMesh on that computer was started outside the desktop (e.g. over SSH). On Windows it opens the
-browser of the signed-in user; HomeMesh must run as that user (the normal autostart does).
+**`open_url`: "no graphical desktop session is running for this user"** (Linux)
+Nobody is logged in to the desktop on that computer (or only over SSH). When HomeMesh was autostarted
+by systemd it opens the link through the user manager (`systemd-run --user xdg-open …`), which needs
+the desktop session to have registered itself (KDE and GNOME do). On Windows it opens the browser of
+the signed-in user; HomeMesh must run as that user (the normal autostart does).
+
+**`homemesh web set-searxng` / `worker allow-tool` / `restart`: "not set up on this computer yet"**
+Deliberate: these would otherwise create a default configuration on a computer that was never joined
+or set up. Join it first (`homemesh worker join …`) or run `homemesh setup`.
 
 ## Chat and memory
 
