@@ -126,6 +126,11 @@ jobs:
       - name: HomeMesh searches through it; it is loopback-only, non-root and leaves file ownership alone
         run: |
           export PATH="$RUNNER_TEMP/venv/bin:$PATH" HOMEMESH_HOME="$RUNNER_TEMP/hm"
+          # A computer that was never set up has nothing to configure (and gets no default config).
+          if homemesh web set-searxng http://127.0.0.1:8888; then echo "configured a computer that is not set up"; exit 1; fi
+          test ! -e "$(homemesh config path)"
+          echo "correct-horse-battery" | homemesh setup --mode standalone --non-interactive --username owner \
+            --password-stdin --mock --no-service --port 18924
           homemesh web set-searxng http://127.0.0.1:8888
           homemesh worker allow-tool web_search
           homemesh web test "linux kernel"
