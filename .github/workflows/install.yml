@@ -134,7 +134,9 @@ jobs:
           conf="$HOME/.config/homemesh-searxng/settings.yml"
           test "$(stat -c '%a %U' "$conf")" = "600 $(id -un)"
           test "$(podman inspect -f '{{.Config.User}}' homemesh-searxng)" = "977:977"
-          podman top homemesh-searxng huser user | tee /dev/stderr | tail -n +2 | awk '{print $1}' | sort -u | grep -qx "$(id -un)"
+          # Every process in the container runs as this user on the host (podman shows the uid or the name).
+          podman top homemesh-searxng huser user | tee /dev/stderr | tail -n +2 | awk '{print $1}' | sort -u > "$RUNNER_TEMP/husers"
+          grep -Eqx "$(id -u)|$(id -un)" "$RUNNER_TEMP/husers" && test "$(wc -l < "$RUNNER_TEMP/husers")" -eq 1
       - name: install-searxng.sh --remove keeps the settings
         run: |
           bash deploy/bazzite/install-searxng.sh --remove
