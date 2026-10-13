@@ -319,7 +319,11 @@ Then ask a tool-capable model (e.g. `qwen3:8b`): "search the web for …" or "op
 
 ## Updating later
 
-* **Windows:** `cd $HOME\homemesh; git pull; powershell -ExecutionPolicy Bypass -File deploy\windows\install.ps1 -Upgrade`
+* **Windows:** `cd $HOME\homemesh; git pull; powershell -ExecutionPolicy Bypass -File deploy\windows\install.ps1 -Upgrade`.
+  The upgrade rebuilds the web app when it changed, which needs Node.js. If you used the portable Node
+  ZIP (step 1.1), first put it on the PATH for that window:
+  `$env:Path = "$env:LOCALAPPDATA\Programs\node-v24.20.0-win-x64;$env:Path"`. Without Node the
+  previous web app keeps working, just without the newest screens.
 * **Bazzite:** `cd ~/homemesh && git pull && bash deploy/linux/install.sh --no-web --upgrade`
 
 Upgrade the hub first. Each upgrade stops and restarts HomeMesh, and the database is backed up
