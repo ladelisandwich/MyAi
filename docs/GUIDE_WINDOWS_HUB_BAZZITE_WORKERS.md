@@ -230,13 +230,14 @@ Lighter alternatives are `llama3.1:8b` (~5 GB) and `llama3.2:3b` (~2 GB).
 bash deploy/linux/install.sh --no-web    # workers don't need the web app
 ```
 
-On the Windows PC run `homemesh node pair`, then paste the printed command here, adding a name:
+On the **Windows PC** run `homemesh node pair`. It prints a complete `homemesh worker join …` line
+with a real one-time code and the full fingerprint. Copy **that** line, not the example below. Paste
+it here, add `--name bazzite-3080`, and chain the next commands with `&&` so they only run if joining
+worked:
 
 ```bash
-homemesh worker join --coordinator https://WIN-IP:8765 --code XXXX-XXXX-XXXX --fingerprint 3F:A2:…:9C --name bazzite-3080
-homemesh service install
-homemesh start
-homemesh status
+homemesh worker join --coordinator https://WIN-IP:8765 --code <code> --fingerprint <full fingerprint> --name bazzite-3080 \
+  && homemesh service install && homemesh start && homemesh status
 ```
 
 `status` should show `coordinator_link: ✓ … reachable`. If join reports a **fingerprint mismatch**,

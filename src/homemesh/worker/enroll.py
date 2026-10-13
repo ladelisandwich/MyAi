@@ -14,6 +14,7 @@ owner explicitly passes ``--allow-insecure-http``.
 
 from __future__ import annotations
 
+import re
 import socket
 import ssl
 from pathlib import Path
@@ -103,6 +104,12 @@ def join(coordinator_url: str, code: str, paths: AppPaths, *, node_name: str, fi
             raise EnrollmentError("A TLS fingerprint is required to join an HTTPS coordinator safely.",
                                   hint="Copy it from the coordinator's 'Add a computer' dialog or 'homemesh tls show', "
                                        "and pass --fingerprint.")
+        if not re.fullmatch(r"(?:[0-9A-F]{2}:){31}[0-9A-F]{2}", normalize_fingerprint(fingerprint)):
+            raise EnrollmentError(
+                "That fingerprint is incomplete or mistyped: a full fingerprint has 32 pairs of characters "
+                "like 0A:69:2F:… (64 hex digits).",
+                hint="Copy the whole 'homemesh worker join …' line that 'homemesh node pair' prints on the "
+                     "coordinator, or the fingerprint from 'homemesh tls show' there.")
         pem = fetch_ca_unverified(url, timeout)
         actual = pem_fingerprint(pem)
         if normalize_fingerprint(actual) != normalize_fingerprint(fingerprint):

@@ -102,6 +102,11 @@ def cmd_run(ctx: Ctx) -> int:
 def cmd_start(ctx: Ctx) -> int:
     from homemesh.cli import service
 
+    if not ctx.paths.config_file.exists():
+        print("✗ HomeMesh is not set up on this computer yet, so there is nothing to start.\n"
+              "  Worker: run the 'homemesh worker join …' line that 'homemesh node pair' prints on the coordinator.\n"
+              "  Coordinator or single computer: run 'homemesh setup'.")
+        return EXIT_USAGE
     print(service.start(ctx.paths))
     return EXIT_OK
 

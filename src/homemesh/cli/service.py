@@ -76,12 +76,16 @@ Description=HomeMesh AI (personal AI platform)
 Documentation=https://github.com/ladelisandwich/myai
 After=network-online.target
 Wants=network-online.target
+# Not set up yet (no config): don't start a default instance at login.
+ConditionPathExists={paths.config_file}
 
 [Service]
 Type=simple
 ExecStart={_python_for_service()} -m homemesh run
 Restart=on-failure
 RestartSec=5
+# Exit code 2 = refused to start because of the configuration: retrying cannot help.
+RestartPreventExitStatus=2
 TimeoutStopSec=30
 {env}
 # Hardening (user services)

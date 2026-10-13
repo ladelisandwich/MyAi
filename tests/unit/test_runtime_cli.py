@@ -92,3 +92,32 @@ def test_no_direct_subprocess_run_outside_the_helper():
     offenders = [str(f.relative_to(root)) for f in root.rglob("*.py")
                  if f.name != "proc.py" and "subprocess.run(" in f.read_text(encoding="utf-8")]
     assert offenders == [], f"use homemesh.common.proc.run_quiet instead: {offenders}"
+
+
+def test_start_refuses_on_a_computer_that_is_not_set_up(tmp_path, monkeypatch):
+    from homemesh.cli import main as cli_main
+    from homemesh.cli import service
+
+    monkeypatch.setattr(service, "start", lambda paths: (_ for _ in ()).throw(AssertionError("must not start")))
+    assert cli_main.main(["--home", str(tmp_path), "start"]) == 2
+
+
+def test_incomplete_fingerprint_is_reported_without_contacting_the_coordinator(tmp_path, monkeypatch):
+    import pytest
+
+    from homemesh.common.paths import AppPaths
+    from homemesh.worker import enroll
+
+    monkeypatch.setattr(enroll, "fetch_ca_unverified", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no network")))
+    paths = AppPaths(config_dir=tmp_path, data_dir=tmp_path / "data")
+    with pytest.raises(enroll.EnrollmentError, match="incomplete"):
+        enroll.join("https://192.168.50.187:8765", "XXXX-XXXX-XXXX", paths, node_name="x", fingerprint="0A:69:…:40")
+
+
+def test_systemd_unit_waits_for_setup_and_does_not_loop_on_config_errors(tmp_path):
+    from homemesh.cli.service import render_unit
+    from homemesh.common.paths import AppPaths
+
+    unit = render_unit(AppPaths(config_dir=tmp_path / "cfg", data_dir=tmp_path / "data"))
+    assert f"ConditionPathExists={tmp_path / 'cfg' / 'homemesh.toml'}" in unit
+    assert "RestartPreventExitStatus=2" in unit
