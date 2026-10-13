@@ -76,6 +76,9 @@ Import boundaries are enforced by `tests/unit/test_import_rules.py`: pure packag
   `[[mock:tool:NAME {json}]]`.
 * Frontend: no router or UI kit; pages in `apps/web/src/pages`, API types in `src/api/types.ts`, Markdown via
   `lib/markdown.ts` (marked + DOMPurify). CSP forbids inline scripts. The service worker never caches `/api/`.
+* Web access goes only through `tools/webfetch.fetch_public` (public addresses only, re-checked on every
+  redirect, connects to the checked IP) and `tools/urlsafety.normalize_url`; never add another HTTP path
+  that a model can steer. `open_url` stays a `write` tool (approval every time).
 * User-facing errors: raise `HomeMeshError` subclasses with a stable `code`, a plain-language `message` and
   an actionable `hint`. Document new codes in TROUBLESHOOTING.md.
 

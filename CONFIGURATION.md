@@ -110,7 +110,7 @@ allowed_roots = ["D:/Documents/Notes"]
 | `task_types` | all | Subset of `chat`, `embed`, `knowledge.scan`, `tool.exec`, `model.manage`. |
 | `allowed_roots` | `[]` | Folders this computer allows to be indexed or read by tools. Empty = none. Sensitive locations (`.ssh`, `.gnupg`, browser profiles, password stores, `.env` files, private keys) are refused even inside allowed folders. Manage with `homemesh worker allow-path` / `disallow-path`. |
 | `ignore_gpus` | `[]` | GPUs HomeMesh should not count when scheduling, by part of their name, e.g. `["GTX 745"]`: for a card your model server doesn't use (hide it from Ollama too, e.g. `CUDA_VISIBLE_DEVICES=-1`). They are still shown, marked "ignored for scheduling". |
-| `allowed_tools` | `["system_info", "list_directory", "read_file"]` | Tools this computer agrees to run. `write_file` must be added explicitly and still needs your approval per use. |
+| `allowed_tools` | `["system_info", "list_directory", "read_file"]` | Tools this computer agrees to run. `write_file`, `web_search`, `fetch_url` and `open_url` must be added explicitly (`homemesh worker allow-tool <name>`); `write_file` and `open_url` still need your approval per use. See [docs/WEB_ACCESS.md](docs/WEB_ACCESS.md) for the internet tools. |
 | `heartbeat_interval_s` | `10` | |
 | `allow_remote_mode_change` | `true` | Let the coordinator UI change this computer's mode. |
 | `tls_ca_file` | | Set by `worker join` (the pinned CA). |
@@ -174,6 +174,21 @@ vLLM is the same with its URL (default port 8000) and served model name.
 | `format` | `text` | `text` or `json`. |
 | `to_file` | `true` | Also write `data/logs/homemesh.log` (rotated). Message contents are never logged. |
 
+## `[web]`
+
+Settings for the internet tools on this computer (they only run where `worker.allowed_tools` lists
+them). Set-up and safety model: [docs/WEB_ACCESS.md](docs/WEB_ACCESS.md).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `searxng_url` | `""` | Your own SearXNG for `web_search`, e.g. `http://127.0.0.1:8888` (`homemesh web set-searxng …`). Empty = web search not set up here. |
+| `safesearch` | `1` | `0` off, `1` moderate, `2` strict. |
+| `search_language` | `auto` | Search language (`en`, `de`, `all`, …). |
+| `max_results` | `8` | Results per search (1-20). |
+| `timeout_s` | `20` | Per search request, and per page or redirect for `fetch_url`. |
+| `max_download_mb` | `5` | Pages are cut off beyond this (marked `truncated`). |
+| `max_redirects` | `5` | Each redirect is re-checked against the private-address rules. |
+
 ## `[cloud]`
 
 | Key | Default | Meaning |
@@ -188,7 +203,8 @@ vLLM is the same with its URL (default port 8000) and served model name.
   (`HOMEMESH__SERVER__TLS_EXTRA_SANS='["10.0.0.5"]'`).
 * Plain-text shortcuts for containers and systemd units:
   `HOMEMESH_OLLAMA_URL=http://ollama:11434` (replaces the backend list with that Ollama),
-  `HOMEMESH_TLS_SANS=192.168.1.10,server.local`, and `HOMEMESH_MOCK=1` (tests only).
+  `HOMEMESH_TLS_SANS=192.168.1.10,server.local`, `HOMEMESH_SEARXNG_URL=http://127.0.0.1:8888`, and
+  `HOMEMESH_MOCK=1` (tests only).
 * `HOMEMESH_MOCK_DELAY`: seconds between mock tokens (tests).
 
 ## In-app settings (stored in the database)

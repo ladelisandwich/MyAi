@@ -88,6 +88,12 @@ If a game is running, set the node to **Balanced** or **Background** mode (Nodes
 `homemesh node mode <name> background`; `homemesh node pause <name>` stops new work entirely). HomeMesh then avoids new GPU work while the GPU is busy; it never
 stops or kills other programs.
 
+## Web search with SearXNG (optional)
+
+`bash deploy/bazzite/install-searxng.sh` sets up SearXNG as a rootless Podman Quadlet user service
+(`homemesh-searxng.container`), published on `127.0.0.1:8888` only, so HomeMesh's `web_search` tool
+can use it. No root, no firewall change. See [docs/WEB_ACCESS.md](../../docs/WEB_ACCESS.md).
+
 ## SELinux note
 
 `ollama.container` sets `SecurityLabelDisable=true`, which turns off SELinux *labelling for that

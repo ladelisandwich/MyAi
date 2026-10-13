@@ -78,3 +78,14 @@ class ToolRepo(Repo):
     async def list_executions(self, limit: int = 100) -> list[Row]:
         rows = await self.db.fetchall("SELECT * FROM tool_executions ORDER BY started_at DESC LIMIT ?", (limit,))
         return [decode(r, arguments_json={}, result_json=None) for r in rows]  # type: ignore[misc]
+
+    async def results_in_conversation(self, conversation_id: str, tool_names: list[str],
+                                      limit: int = 200) -> list[Any]:
+        """Outputs of successful calls of these tools in one conversation, newest first."""
+        if not tool_names:
+            return []
+        marks = ",".join("?" * len(tool_names))
+        rows = await self.db.fetchall(
+            f"SELECT result_json FROM tool_executions WHERE conversation_id=? AND tool_name IN ({marks})"
+            " AND status='succeeded' ORDER BY started_at DESC LIMIT ?", (conversation_id, *tool_names, limit))
+        return [decode(r, result_json=None)["result_json"] for r in rows]  # type: ignore[index]

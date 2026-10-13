@@ -27,6 +27,12 @@ for q in /usr/libexec/podman/quadlet /usr/lib/podman/quadlet; do [ -x "$q" ] && 
 as_tester "$QUADLET -dryrun -user" > /tmp/quadlet.out 2>&1 || { cat /tmp/quadlet.out; echo "Quadlet rejected the unit files"; exit 1; }
 grep -E '^(---|ExecStart=)' /tmp/quadlet.out | cut -c1-240
 if grep -iE 'unsupported|unknown key|error' /tmp/quadlet.out; then echo "Quadlet reported problems"; exit 1; fi
+echo "== SearXNG unit as install-searxng.sh writes it (custom port), Quadlet dry-run again"
+as_tester 'rm -f ~/.config/containers/systemd/homemesh-searxng.container && cd ~/homemesh && bash deploy/bazzite/install-searxng.sh --no-start --port 18888'
+as_tester "$QUADLET -dryrun -user" > /tmp/quadlet2.out 2>&1 || { cat /tmp/quadlet2.out; echo "Quadlet rejected the SearXNG unit"; exit 1; }
+grep -q -- '127.0.0.1:18888:8080' /tmp/quadlet2.out || { cat /tmp/quadlet2.out; echo "port not applied"; exit 1; }
+if grep -iE 'unsupported|unknown key|error' /tmp/quadlet2.out; then echo "Quadlet reported problems"; exit 1; fi
+as_tester 'test "$(stat -c %a ~/.config/homemesh-searxng/settings.yml)" = 600'
 
 echo "== Ollama via deploy/linux/install-ollama.sh (per-user, checksum-verified), then a tiny real model"
 as_tester 'cd ~/homemesh && bash deploy/linux/install-ollama.sh --no-service'

@@ -18,7 +18,7 @@ from homemesh.tools.base import ToolContext
 from homemesh.tools.registry import ToolArgumentError, ToolRegistry
 
 
-def make_worker_tool_runner(policy: Any, workspace_dir: Path | None = None
+def make_worker_tool_runner(policy: Any, workspace_dir: Path | None = None, web: Any = None
                             ) -> Callable[[ToolExecPayload], Awaitable[ToolExecResult]]:
     registry = ToolRegistry()
 
@@ -36,7 +36,7 @@ def make_worker_tool_runner(policy: Any, workspace_dir: Path | None = None
             args = registry.validate_args(tool, payload.arguments)
         except ToolArgumentError as exc:
             return ToolExecResult(ok=False, error=str(exc))
-        ctx = ToolContext(path_policy=policy.path_policy(), workspace_dir=workspace_dir)
+        ctx = ToolContext(path_policy=policy.path_policy(), workspace_dir=workspace_dir, web=web)
         try:
             output = await asyncio.wait_for(tool.handler(ctx, args), timeout=tool.timeout_s)
             return ToolExecResult(ok=True, output=output)

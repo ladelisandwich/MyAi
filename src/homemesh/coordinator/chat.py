@@ -41,6 +41,7 @@ from homemesh.memory.text import detect_explicit
 from homemesh.protocol.jobs import ChatMessage, GenerationOptions, ToolCall
 from homemesh.protocol.models import CAP_COMPLETION, CAP_TOOLS, CAP_VISION
 from homemesh.scheduler.policy import TaskRequirements
+from homemesh.tools.builtin.web import WEB_RESULT_TOOLS
 
 log = get_logger(__name__)
 PERSIST_INTERVAL_S = 1.0
@@ -287,7 +288,8 @@ class ChatService:
             try:
                 ctx = assemble(assistant=settings["assistant"], profile=settings["user_profile"], history=history,
                                user_message=user_chat, memories=memories, documents=docs, num_ctx=num_ctx,
-                               max_output_tokens=max_out, tools_available=bool(offered))
+                               max_output_tokens=max_out, tools_available=bool(offered),
+                               web_tools=any(t.name in WEB_RESULT_TOOLS for t in offered))
             except ContextTooLarge as exc:
                 raise ValidationFailed(str(exc), code="context_too_large") from exc
             context_summary = {**(final.get("context_json") or {}), **ctx.summary()}

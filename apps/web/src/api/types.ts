@@ -308,6 +308,7 @@ export interface ToolInfo {
   side_effect: string;
   location: string;
   requires_approval: boolean;
+  url_argument?: string | null;
   enabled: boolean;
   approval: string;
   available_on: string[];

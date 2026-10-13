@@ -119,6 +119,28 @@ Plain-HTTP enrollment to a non-loopback coordinator is refused unless `--allow-i
 * Every tool execution, approval decision, login, pairing, revocation, settings change and backup is
   recorded in the **audit log** (Settings → Security, `GET /api/v1/system/audit`).
 
+## Internet access (web_search, fetch_url, open_url)
+
+Off by default; each computer allows them itself in `worker.allowed_tools`. Details:
+[docs/WEB_ACCESS.md](docs/WEB_ACCESS.md).
+
+* `web_search` uses the owner's own SearXNG on `127.0.0.1` (installed per user with rootless Podman,
+  published on loopback only, pinned image, no root). Queries go to public search engines.
+* `fetch_url` connects only to public internet addresses. Private, loopback, link-local (cloud
+  metadata), CGNAT/Tailscale, IPv6 local, multicast/reserved and IPv4-in-IPv6 forms are refused; every
+  redirect is re-checked; the connection goes to the exact address that was checked (DNS-rebinding
+  safe) while TLS is verified against the real host name; only web ports (80, 443, 1024+); environment
+  proxies are ignored; size, time and redirect limits apply, and compressed bodies are inflated with a
+  hard limit (no decompression bombs).
+* **Exfiltration guard:** `fetch_url` needs an approval for any address that the user did not write in
+  the conversation and that no earlier search result or fetched page contained (exact host, path and
+  query), so injected instructions can't quietly send data out in a URL. Search queries are written by
+  the model and are not checked this way; set `web_search` to *ask every time* if that matters to you.
+* `open_url` is a `write` tool: it always needs approval, shows the exact canonical link and the
+  computer, flags links into the local network, and accepts only `http(s)` URLs (never files,
+  programs or other URL schemes). No shell is involved.
+* Search results and pages are untrusted data in the prompt, like documents.
+
 ## Memory
 
 * Memories are saved only when you ask ("remember that…", the Memory page, or `/remember`) or, if you
@@ -162,5 +184,7 @@ which are hidden and unschedulable unless both `[cloud] enabled` and the backend
 * Database and logs are not encrypted at rest (use disk encryption).
 * The single-owner model has no per-user isolation yet.
 * Prompt injection can still mislead a model's *answers*; it can't bypass approvals or path rules.
+  With web tools enabled, a model could be misled into putting private details into a *search query*
+  (see Internet access).
 * The self-signed CA has to be trusted manually on phones for a warning-free browser experience.
 * LAN discovery (off by default) reveals that HomeMesh runs on the network.

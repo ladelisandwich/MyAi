@@ -328,6 +328,28 @@ def cmd_worker(ctx: Ctx) -> int:
         print(f"✓ {p} may now be indexed by HomeMesh on this computer. Restart the worker to apply "
               "('homemesh restart').")
         return EXIT_OK
+    if a.action in ("allow-tool", "disallow-tool"):
+        from homemesh.tools.registry import ToolRegistry
+
+        cfg = ctx.cfg
+        node_tools = sorted(t.name for t in ToolRegistry().all() if t.location == "node")
+        if a.tool not in node_tools:
+            print(f"✗ '{a.tool}' is not a tool that runs on a computer. Choose one of: {', '.join(node_tools)}")
+            return EXIT_USAGE
+        if a.action == "allow-tool":
+            if a.tool not in cfg.worker.allowed_tools:
+                cfg.worker.allowed_tools = [*cfg.worker.allowed_tools, a.tool]
+                save_config(cfg, ctx.paths.config_file)
+            print(f"✓ '{a.tool}' may now run on this computer. Restart HomeMesh to apply ('homemesh restart').")
+            if a.tool == "web_search" and not cfg.web.searxng_url:
+                print("  Web search also needs your SearXNG address: homemesh web set-searxng http://127.0.0.1:8888")
+            if a.tool == "open_url":
+                print("  Every link is shown to you with an Approve button before the browser opens it.")
+        else:
+            cfg.worker.allowed_tools = [t for t in cfg.worker.allowed_tools if t != a.tool]
+            save_config(cfg, ctx.paths.config_file)
+            print(f"✓ '{a.tool}' is no longer allowed on this computer. Restart HomeMesh to apply.")
+        return EXIT_OK
     if a.action == "disallow-path":
         cfg = ctx.cfg
         cfg.worker.allowed_roots = [r for r in cfg.worker.allowed_roots if r != a.path]
@@ -346,6 +368,57 @@ def cmd_worker(ctx: Ctx) -> int:
     print(f"Allowed folders: {', '.join(ctx.cfg.worker.allowed_roots) or 'none'}")
     print(f"Allowed tools:   {', '.join(ctx.cfg.worker.allowed_tools) or 'none'}")
     print(f"Mode: {ctx.cfg.worker.mode}   max concurrent jobs: {ctx.cfg.worker.max_concurrent_jobs}")
+    return EXIT_OK
+
+
+def cmd_web(ctx: Ctx) -> int:
+    a = ctx.args
+    cfg = ctx.cfg
+    if a.action == "set-searxng":
+        url = "" if a.url.lower() in ("none", "off", "") else a.url
+        try:
+            cfg.web.searxng_url = url
+        except ValueError as exc:
+            print(f"✗ {exc}")
+            return EXIT_USAGE
+        save_config(cfg, ctx.paths.config_file)
+        print(f"✓ web.searxng_url = {cfg.web.searxng_url or '(not set)'}. Restart HomeMesh to apply ('homemesh restart').")
+        if cfg.web.searxng_url and "web_search" not in cfg.worker.allowed_tools:
+            print("  Allow the tool on this computer too: homemesh worker allow-tool web_search")
+        return EXIT_OK
+    # test: run the real tools locally, outside the coordinator, so the owner can check the setup.
+    import asyncio
+
+    from homemesh.tools.base import ToolContext
+    from homemesh.tools.builtin.web import FETCH_URL, WEB_SEARCH
+    from homemesh.tools.registry import ToolArgumentError, ToolRegistry
+
+    tctx = ToolContext(web=cfg.web)
+    try:
+        if a.fetch:
+            args = ToolRegistry.validate_args(FETCH_URL, {"url": a.fetch, "max_chars": 1500})
+            out = asyncio.run(FETCH_URL.handler(tctx, args))
+            print(f"✓ {out['final_url']} (HTTP {out['status']}, {out['content_type']})")
+            print(f"  Title: {out['title'] or '(none)'}")
+            print("  " + out["content"][:600].replace("\n", "\n  "))
+            return EXIT_OK
+        args = ToolRegistry.validate_args(WEB_SEARCH, {"query": a.query, "max_results": 5})
+        out = asyncio.run(WEB_SEARCH.handler(tctx, args))
+    except (ToolArgumentError, OSError, ValueError) as exc:
+        print(f"✗ {exc}")
+        return EXIT_ERROR
+    if a.json:
+        _out(out, True)
+        return EXIT_OK
+    print(f"✓ SearXNG at {cfg.web.searxng_url} answered: {len(out['results'])} result(s) for {a.query!r}")
+    for r in out["results"]:
+        print(f"  - {r['title']}\n    {r['url']}")
+    for e in out.get("unresponsive_engines", []):
+        print(f"  ! engine did not answer: {e}")
+    if "web_search" not in cfg.worker.allowed_tools:
+        print("  Note: web_search is not in worker.allowed_tools here yet: homemesh worker allow-tool web_search")
+    if not out["results"]:
+        print("  ! no results: SearXNG works, but the search engines it asked returned nothing this time.")
     return EXIT_OK
 
 
@@ -688,6 +761,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("path")
     dp = wsub.add_parser("disallow-path")
     dp.add_argument("path")
+    at = wsub.add_parser("allow-tool", help="let a tool run on this computer (e.g. web_search, fetch_url, open_url)")
+    at.add_argument("tool")
+    dt = wsub.add_parser("disallow-tool")
+    dt.add_argument("tool")
     w.set_defaults(func=cmd_worker)
 
     m = sub.add_parser("model", help="list and manage models")
@@ -741,6 +818,15 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--new-ca", action="store_true",
                    help="init: replace the certificate authority (e.g. if its key may have leaked); the old one is kept aside")
     t.set_defaults(func=cmd_tls)
+
+    wb = sub.add_parser("web", help="set up and test internet access for the assistant (see docs/WEB_ACCESS.md)")
+    wbsub = wb.add_subparsers(dest="action", required=True)
+    ss = wbsub.add_parser("set-searxng", help="address of your SearXNG, e.g. http://127.0.0.1:8888 ('none' to clear)")
+    ss.add_argument("url")
+    wt = wbsub.add_parser("test", help="run a real web search (or --fetch URL) from this computer")
+    wt.add_argument("query", nargs="?", default="HomeMesh self-hosted AI")
+    wt.add_argument("--fetch", metavar="URL", help="fetch this page instead of searching")
+    wb.set_defaults(func=cmd_web)
 
     c = sub.add_parser("config", help="show, locate or validate homemesh.toml")
     c.add_argument("action", nargs="?", default="show", choices=["show", "path", "validate"])

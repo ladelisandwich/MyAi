@@ -51,6 +51,14 @@ First working version.
   guide for a Windows 11 hub with Bazzite workers; CI that runs the real installers on Windows (PowerShell
   5.1), inside the Bazzite image, and builds/runs the container image; Python 3.14 support.
 
+* **Internet access (opt-in per computer):** `web_search` through the owner's own SearXNG,
+  `fetch_url` for public pages (private/local addresses refused on every redirect, DNS-rebinding safe,
+  HTTPS verified, size/time limits; approval for addresses that neither the user nor a web result
+  supplied), and `open_url` to open a link in a computer's browser (approval every time). Rootless,
+  loopback-only SearXNG Quadlet and installer for Bazzite (`deploy/bazzite/install-searxng.sh`),
+  `[web]` settings, `homemesh worker allow-tool/disallow-tool`, `homemesh web set-searxng/test`.
+  Approval cards now name the computer and say why they ask. Guide: docs/WEB_ACCESS.md.
+
 ### Fixed during development (found by CI and real-process testing)
 
 * Backup verification left the extracted database open, which broke verify/restore on Windows.

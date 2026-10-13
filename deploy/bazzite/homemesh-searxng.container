@@ -1,0 +1,43 @@
+# SearXNG, a private meta search engine, for HomeMesh's web_search tool. Rootless Podman Quadlet
+# user service; reachable from THIS computer only (127.0.0.1). No account, no API key, no root.
+#
+# Installed and started by deploy/bazzite/install-searxng.sh, which also writes the settings file
+# (~/.config/homemesh-searxng/settings.yml, with JSON output on, the rate limiter off and a random
+# secret key). To do it by hand: put that settings.yml in place first, copy this file to
+# ~/.config/containers/systemd/, then:
+#   systemctl --user daemon-reload && systemctl --user start homemesh-searxng
+[Unit]
+Description=SearXNG for HomeMesh web search (127.0.0.1 only)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+ContainerName=homemesh-searxng
+# Pinned build: tag 2026.10.11-ad46ebd7d of the official image (same digest on docker.io and
+# ghcr.io). Updating = changing this line (see docs/WEB_ACCESS.md); there is no automatic update.
+Image=docker.io/searxng/searxng@sha256:ddd642cae6eac75412938fd846ddbf440a2df029cfeae8a562b8b205f4e35e25
+# Loopback only: other computers on your network cannot use this search engine.
+PublishPort=127.0.0.1:8888:8080
+# The image listens on "::" by default, which fails where the container has no IPv6.
+Environment=GRANIAN_HOST=0.0.0.0
+# Run as the image's "searxng" user (uid 977) mapped to YOUR user, never as root, and never let the
+# entrypoint change the ownership of your settings folder.
+UserNS=keep-id:uid=977,gid=977
+Environment=FORCE_OWNERSHIP=false
+Volume=%h/.config/homemesh-searxng:/etc/searxng:ro,Z
+Volume=homemesh-searxng-cache:/var/cache/searxng:Z
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=all
+HealthCmd=wget -q -O /dev/null http://127.0.0.1:8080/healthz
+HealthInterval=5m
+HealthStartPeriod=30s
+HealthRetries=3
+
+[Service]
+Restart=on-failure
+# The first start may download the image (about 100 MB).
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

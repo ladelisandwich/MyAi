@@ -89,7 +89,7 @@ The response is `text/event-stream`. Each event is `event: <name>` plus `data: <
 | `delta` | `{text}` (append to the reply) |
 | `thinking` | `{text}` (reasoning models, if shown) |
 | `tool_call` | `{name, arguments, round}` |
-| `approval_required` | `{approval_id, tool, description, arguments, side_effect, node_id, expires_at, conversation_id}`. Answer with `POST /tools/approvals/{id}` from any device. |
+| `approval_required` | `{approval_id, tool, description, arguments, side_effect, node_id, node_name, expires_at, conversation_id}`, plus `reason` (why a read tool asks, e.g. `fetch_url` with an address not seen in the conversation) and `note` (e.g. `open_url` to a local-network address) when present. `arguments` are the validated, normalised values that will run. Answer with `POST /tools/approvals/{id}` from any device. |
 | `tool_result` | `{name, ok, result: {ok, output, error}}` |
 | `memory_saved` | `{memory_id, content, outcome}` when "remember that…" was detected |
 | `done` | `{message_id, status, metrics, model, node_name, mock}` |

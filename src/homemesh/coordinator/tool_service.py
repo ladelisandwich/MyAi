@@ -27,7 +27,9 @@ from homemesh.coordinator.settings_service import SettingsService
 from homemesh.protocol.jobs import ToolCall, ToolSpec
 from homemesh.scheduler.policy import TaskRequirements
 from homemesh.tools.base import ToolContext, ToolDefinition
+from homemesh.tools.builtin.web import WEB_RESULT_TOOLS, urls_in_output
 from homemesh.tools.registry import ToolArgumentError, ToolRegistry
+from homemesh.tools.urlsafety import extract_urls, url_key
 
 log = get_logger(__name__)
 MAX_RESULT_CHARS = 8000
@@ -157,7 +159,16 @@ class ToolService:
             parsed = self.registry.validate_args(tool, args)
         except ToolArgumentError as exc:
             return {"ok": False, "error": str(exc)}
+        # Continue with the validated (normalised) arguments, so the approval card shows exactly what
+        # will run, e.g. the canonical form of a link.
+        args = parsed.model_dump(mode="json", exclude_unset=True)
         needs_approval = tool.requires_approval or (p is not None and p["approval"] == "always")
+        reason = None
+        if not needs_approval and tool.url_argument and isinstance(args.get(tool.url_argument), str):
+            if not await self._url_known(args[tool.url_argument], conversation_id):
+                needs_approval = True
+                reason = ("This web address did not come from you or from an earlier search result or page in "
+                          "this conversation, so HomeMesh asks before contacting it.")
         approval_id = None
         if needs_approval:
             timeout_s = (await self.settings.section("tools"))["approval_timeout_s"]
@@ -166,9 +177,14 @@ class ToolService:
                 conversation_id=conversation_id, message_id=message_id, side_effect=tool.side_effect,
                 expires_at=iso(utcnow() + timedelta(seconds=timeout_s)))
             approval_id = approval["id"]
+            conn = self.nodes.get(node_id) if node_id else None
             event = {"approval_id": approval_id, "tool": tool.name, "arguments": args, "side_effect": tool.side_effect,
-                     "description": tool.description, "node_id": node_id, "expires_at": approval["expires_at"],
-                     "conversation_id": conversation_id}
+                     "description": tool.description, "node_id": node_id, "node_name": conn.name if conn else None,
+                     "expires_at": approval["expires_at"], "conversation_id": conversation_id}
+            if reason:
+                event["reason"] = reason
+            if tool.approval_note and (note := tool.approval_note(parsed)):
+                event["note"] = note
             self.bus.publish("approval.requested", event, user_id=user_id)
             if emit:
                 await emit("approval_required", event)
@@ -191,6 +207,20 @@ class ToolService:
                                        details={"execution_id": exec_id, "node_id": node_id,
                                                 "side_effect": tool.side_effect})
         return result
+
+    async def _url_known(self, url: str, conversation_id: str | None) -> bool:
+        """Did this exact address appear in the user's own messages or in an earlier web result of
+        this conversation? (Host, path and query must match; see ``url_key``.)"""
+        key = url_key(url)
+        if key is None or not conversation_id:
+            return False
+        for m in await self.repos.messages.list(conversation_id):
+            if m["role"] == "user" and any(url_key(u) == key for u in extract_urls(m.get("content") or "")):
+                return True
+        for out in await self.repos.tools.results_in_conversation(conversation_id, list(WEB_RESULT_TOOLS)):
+            if any(url_key(u) == key for u in urls_in_output(out)):
+                return True
+        return False
 
     async def _run(self, tool: ToolDefinition, parsed: Any, raw_args: dict[str, Any], node_id: str | None,
                    approval_id: str | None, user_id: str, conversation_id: str | None) -> dict[str, Any]:

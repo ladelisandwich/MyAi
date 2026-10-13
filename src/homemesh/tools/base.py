@@ -32,6 +32,8 @@ class ToolContext:
     # Node-side: authorised folders and the workspace where files may be created.
     path_policy: Any = None
     workspace_dir: Path | None = None
+    # Node-side: the computer's [web] settings (WebSection) for the internet tools.
+    web: Any = None
 
 
 Handler = Callable[[ToolContext, Any], Awaitable[Any]]
@@ -50,6 +52,12 @@ class ToolDefinition:
     timeout_s: float = 30.0
     side_effect: SideEffect = "none"
     audit: bool = True
+    # Name of an argument holding a web address the tool contacts. A call whose address did not
+    # come from the user or an earlier web result in the same conversation needs the user's
+    # approval, so a model cannot quietly send data out by putting it into a URL.
+    url_argument: str | None = None
+    # Optional extra line for the approval card, computed from the validated arguments.
+    approval_note: Callable[[Any], str | None] | None = None
 
     @property
     def requires_approval(self) -> bool:
@@ -73,4 +81,5 @@ class ToolDefinition:
             "output": self.output_description, "permissions": self.permissions, "os": self.os,
             "location": self.location, "timeout_s": self.timeout_s, "side_effect": self.side_effect,
             "audit": self.audit, "requires_approval": self.requires_approval,
+            "url_argument": self.url_argument,
         }

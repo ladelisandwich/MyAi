@@ -165,6 +165,33 @@ class LoggingSection(_Section):
     to_file: bool = True
 
 
+class WebSection(_Section):
+    """Settings for the internet tools (web_search, fetch_url, open_url).
+
+    These tools only run on a computer that lists them in ``worker.allowed_tools``; nothing here
+    turns them on by itself.
+    """
+
+    # Your own SearXNG instance, e.g. "http://127.0.0.1:8888" (see docs/WEB_ACCESS.md). Empty means
+    # web_search is not set up on this computer.
+    searxng_url: str = ""
+    # "0" off, "1" moderate, "2" strict (SearXNG safe search levels).
+    safesearch: Literal[0, 1, 2] = 1
+    search_language: str = "auto"
+    max_results: int = Field(default=8, ge=1, le=20)
+    timeout_s: float = Field(default=20, gt=0, le=120)
+    max_download_mb: float = Field(default=5, gt=0, le=50)
+    max_redirects: int = Field(default=5, ge=0, le=10)
+
+    @field_validator("searxng_url")
+    @classmethod
+    def _http_url(cls, v: str) -> str:
+        v = v.strip().rstrip("/")
+        if v and not v.lower().startswith(("http://", "https://")):
+            raise ValueError("web.searxng_url must start with http:// or https://")
+        return v
+
+
 class CloudSection(_Section):
     """Optional cloud model integrations. Disabled by default; nothing in HomeMesh contacts
     a cloud AI service unless this is enabled AND a backend is configured for it."""
@@ -179,6 +206,7 @@ class HomeMeshConfig(_Section):
     inference: InferenceSection = Field(default_factory=InferenceSection)
     knowledge: KnowledgeSection = Field(default_factory=KnowledgeSection)
     logging: LoggingSection = Field(default_factory=LoggingSection)
+    web: WebSection = Field(default_factory=WebSection)
     cloud: CloudSection = Field(default_factory=CloudSection)
 
     # ---- derived helpers -------------------------------------------------
@@ -285,6 +313,8 @@ def _apply_env_overrides(data: dict[str, Any], environ: dict[str, str]) -> dict[
     if environ.get("HOMEMESH_OLLAMA_URL"):
         data.setdefault("inference", {})["backends"] = [
             {"name": "ollama", "type": "ollama", "url": environ["HOMEMESH_OLLAMA_URL"].strip()}]
+    if environ.get("HOMEMESH_SEARXNG_URL"):
+        data.setdefault("web", {})["searxng_url"] = environ["HOMEMESH_SEARXNG_URL"].strip()
     if environ.get("HOMEMESH_TLS_SANS"):
         data.setdefault("server", {})["tls_extra_sans"] = [
             s.strip() for s in environ["HOMEMESH_TLS_SANS"].split(",") if s.strip()]

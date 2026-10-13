@@ -274,6 +274,41 @@ def _web(cfg: HomeMeshConfig) -> Check | None:
     return Check("Web interface", OK, str(d))
 
 
+def _internet_tools(cfg: HomeMeshConfig) -> list[Check]:
+    """Only when this computer allows an internet tool. Never searches: an empty JSON query is
+    answered by SearXNG itself (400 = JSON on, 403 = JSON off)."""
+    allowed = [t for t in ("web_search", "fetch_url", "open_url") if t in cfg.worker.allowed_tools]
+    if not allowed:
+        return []
+    checks = [Check("Internet tools", INFO, "allowed here: " + ", ".join(allowed),
+                    "Each use is visible in the chat; open_url always asks first (docs/WEB_ACCESS.md).")]
+    if "web_search" not in allowed:
+        return checks
+    url = cfg.web.searxng_url
+    if not url:
+        checks.append(Check("SearXNG", FAIL, "web_search is allowed but web.searxng_url is empty",
+                            "homemesh web set-searxng http://127.0.0.1:8888 (see docs/WEB_ACCESS.md)"))
+        return checks
+    try:
+        with httpx.Client(trust_env=False, timeout=5) as client:
+            health = client.get(url + "/healthz")
+            probe = client.get(url + "/search", params={"format": "json"})
+    except httpx.HTTPError as exc:
+        checks.append(Check("SearXNG", FAIL, f"{url} not reachable ({type(exc).__name__})",
+                            "Bazzite: systemctl --user status homemesh-searxng; or re-run "
+                            "deploy/bazzite/install-searxng.sh"))
+        return checks
+    if probe.status_code == 403:
+        checks.append(Check("SearXNG", FAIL, f"{url} answers, but JSON output is off",
+                            "Add json to search.formats in its settings.yml and restart it."))
+    elif health.status_code == 200 and probe.status_code == 400:
+        checks.append(Check("SearXNG", OK, f"{url} (JSON on)", "Try a real search: homemesh web test"))
+    else:
+        checks.append(Check("SearXNG", WARN, f"{url} answered HTTP {health.status_code}/{probe.status_code}",
+                            "Is this really SearXNG? homemesh web test shows details."))
+    return checks
+
+
 def run_doctor(paths: AppPaths) -> list[Check]:
     checks = [_python(), _deps(), _os()]
     cfg_check, cfg = _config(paths)
@@ -293,5 +328,6 @@ def run_doctor(paths: AppPaths) -> list[Check]:
             checks.append(_worker_link(cfg, paths))
         checks += _gpus(cfg)
         checks += asyncio.run(_backends(cfg))
+        checks += _internet_tools(cfg)
     checks.append(_service())
     return checks

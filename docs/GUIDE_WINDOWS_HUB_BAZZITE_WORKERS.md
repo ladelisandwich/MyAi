@@ -293,6 +293,30 @@ optional GPU step in 1.5. The hub works fine as coordinator and embedder either 
 Open `https://WIN-IP:8765`. Trust the HomeMesh certificate on that device (INSTALLATION.md, *Trusting
 the HomeMesh certificate*), then use **Add to Home Screen** to install it as an app.
 
+## 7. Optional: internet access (web search, reading pages, "open YouTube")
+
+Off until you allow it. Search runs through your own SearXNG on the Bazzite desktop; links open on
+the hub after you click **Approve**. Full details and the safety model: [WEB_ACCESS.md](WEB_ACCESS.md).
+
+On the **Bazzite desktop** (in `~/homemesh`, after `git pull` and the upgrade below):
+
+```bash
+bash deploy/bazzite/install-searxng.sh
+homemesh web set-searxng http://127.0.0.1:8888
+homemesh worker allow-tool web_search
+homemesh worker allow-tool fetch_url
+homemesh restart && homemesh web test
+```
+
+On the **Windows hub** (PowerShell):
+
+```powershell
+homemesh worker allow-tool open_url
+homemesh restart
+```
+
+Then ask a tool-capable model (e.g. `qwen3:8b`): "search the web for …" or "open YouTube in my browser".
+
 ## Updating later
 
 * **Windows:** `cd $HOME\homemesh; git pull; powershell -ExecutionPolicy Bypass -File deploy\windows\install.ps1 -Upgrade`

@@ -110,7 +110,7 @@ class WorkerAgent:
         self.executor = Executor(
             self.backends, self.policy, allow_model_downloads=cfg.inference.allow_model_downloads,
             remote_allowed=self._remote_allowed, models_cache=lambda: self.models,
-            tool_runner=make_worker_tool_runner(self.policy, paths.workspace_dir),
+            tool_runner=make_worker_tool_runner(self.policy, paths.workspace_dir, web=cfg.web),
         )
 
     # ------------------------------------------------------------------ helpers

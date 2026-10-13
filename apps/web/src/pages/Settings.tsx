@@ -99,7 +99,7 @@ function ToolPolicies() {
               <td><input type="checkbox" checked={t.enabled} aria-label={`Enable ${t.name}`} onChange={async (e) => { try { await api.put(`/api/v1/tools/${t.name}/policy`, { enabled: e.target.checked, approval: t.approval }); void reload(); } catch (err) { toast.error(err); } }} /></td>
               <td>{t.requires_approval ? <span className="small">always required</span> : (
                 <select value={t.approval} style={{ width: "auto" }} aria-label={`Approval for ${t.name}`} onChange={async (e) => { try { await api.put(`/api/v1/tools/${t.name}/policy`, { enabled: t.enabled, approval: e.target.value }); void reload(); } catch (err) { toast.error(err); } }}>
-                  <option value="default">not needed (read-only)</option><option value="always">ask every time</option>
+                  <option value="default">{t.url_argument ? "only for new web addresses" : "not needed (read-only)"}</option><option value="always">ask every time</option>
                 </select>)}</td>
             </tr>
           ))}

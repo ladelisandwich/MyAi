@@ -165,6 +165,50 @@ Check that the collection is `indexed` and search finds the passage (Knowledge �
 often ignore context; try a larger chat model. Knowledge retrieval can be turned off per message or in
 Settings.
 
+## Internet access (web search, pages, links)
+
+Start with `homemesh web test` (a real search from this computer) or
+`homemesh web test --fetch https://example.com/`. Set-up: [docs/WEB_ACCESS.md](docs/WEB_ACCESS.md).
+
+**The assistant never searches / opens links**
+The tool must be allowed on an online computer (`homemesh worker allow-tool web_search`, then
+`homemesh restart`; Settings → Tool permissions shows where each tool runs), and the chat model must
+support tools (Models page: **tools** capability). Small models often ignore tools; try a larger one.
+
+**"web search is not set up on this computer: web.searxng_url is empty"**
+`homemesh web set-searxng http://127.0.0.1:8888` on the computer that runs SearXNG, then restart.
+
+**"SearXNG at http://127.0.0.1:8888 is not reachable"**
+On Bazzite: `systemctl --user status homemesh-searxng` and `journalctl --user -u homemesh-searxng`.
+Re-run `bash deploy/bazzite/install-searxng.sh` (keeps your settings).
+
+**"SearXNG refused to answer in JSON"** (HTTP 403)
+Its `settings.yml` lacks `json` under `search.formats`. Add it
+(`~/.config/homemesh-searxng/settings.yml`) and `systemctl --user restart homemesh-searxng`.
+
+**"SearXNG's rate limiter blocked the request"** (HTTP 429)
+Set `server.limiter: false` in its settings (the installer does), then restart it.
+
+**Searches return nothing / `unresponsive_engines`**
+Search engines sometimes rate-limit or show CAPTCHAs to SearXNG. Wait, or enable other engines in
+SearXNG's settings. HomeMesh reports this honestly instead of inventing results.
+
+**"… points to a private or local network address"**
+Deliberate: `fetch_url` never reads pages on your home network or this computer. Open such pages
+yourself (or with `open_url`, which asks first).
+
+**"its HTTPS certificate is not valid for this name"**
+The site's certificate doesn't match, or something on your network intercepts HTTPS (some antivirus
+and corporate proxies). HomeMesh never skips certificate checks.
+
+**An approval card appears for `fetch_url`**
+The model wants an address that you didn't give and no search result contained. Approve if the link
+looks right, deny otherwise (see "No silent data leaks" in WEB_ACCESS.md).
+
+**`open_url`: "not running inside a graphical desktop session"** (Linux)
+HomeMesh on that computer was started outside the desktop (e.g. over SSH). On Windows it opens the
+browser of the signed-in user; HomeMesh must run as that user (the normal autostart does).
+
 ## Chat and memory
 
 **A reply was "interrupted"**

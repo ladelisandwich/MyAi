@@ -156,7 +156,8 @@ class Harness:
         return r.json()["code"]
 
     async def add_worker(self, name: str, *, models: dict[str, list[str]] | None = None, token_delay: float = 0.005,
-                         wait_online: bool = True, **worker_overrides: Any) -> WorkerHandle:
+                         wait_online: bool = True, web: dict[str, Any] | None = None,
+                         **worker_overrides: Any) -> WorkerHandle:
         code = await self.pairing_code()
         wroot = self.root / f"worker-{name}"
         wpaths = paths_for(wroot)
@@ -166,6 +167,8 @@ class Harness:
         cfg.worker.coordinator_url = self.base_url
         for k, v in worker_overrides.items():
             setattr(cfg.worker, k, v)
+        for k, v in (web or {}).items():
+            setattr(cfg.web, k, v)
         backend = MockBackend("mock", token_delay_s=token_delay, models=models)
         agent = WorkerAgent(cfg, wpaths, backends={"mock": backend})
         task = asyncio.create_task(agent.run(), name=f"worker-{name}")

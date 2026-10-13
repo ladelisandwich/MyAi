@@ -1,7 +1,8 @@
 name: Install paths
 
 # Runs the real installers the way a user would: PowerShell 5.1 on Windows, install.sh inside
-# the actual Bazzite image (plus a Quadlet dry-run with Bazzite's Podman), and the container image.
+# the actual Bazzite image (plus a Quadlet dry-run with Bazzite's Podman), the SearXNG Quadlet
+# with rootless Podman, and the container image.
 on:
   push:
     branches: [main, "claude/**"]
@@ -101,6 +102,50 @@ jobs:
         run: sudo podman pull --quiet ghcr.io/ublue-os/bazzite-nvidia-open:stable
       - name: Test inside Bazzite
         run: sudo podman run --rm -v "$PWD:/src:ro" ghcr.io/ublue-os/bazzite-nvidia-open:stable bash /src/scripts/ci/bazzite_container_test.sh
+
+  searxng:
+    name: SearXNG for web search (rootless Podman Quadlet, real searches)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install HomeMesh (Python package only)
+        run: python -m venv "$RUNNER_TEMP/venv" && "$RUNNER_TEMP/venv/bin/pip" install -q -e .
+      - name: Start a systemd user manager (as a desktop login would)
+        run: |
+          sudo loginctl enable-linger "$(id -un)"
+          for _ in $(seq 1 30); do [ -S "/run/user/$(id -u)/bus" ] && break; sleep 1; done
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
+          podman --version
+      - name: install-searxng.sh (as a user would run it)
+        run: bash deploy/bazzite/install-searxng.sh
+      - name: HomeMesh searches through it; it is loopback-only, non-root and leaves file ownership alone
+        run: |
+          export PATH="$RUNNER_TEMP/venv/bin:$PATH" HOMEMESH_HOME="$RUNNER_TEMP/hm"
+          homemesh web set-searxng http://127.0.0.1:8888
+          homemesh worker allow-tool web_search
+          homemesh web test "linux kernel"
+          lan_ip="$(hostname -I | awk '{print $1}')"
+          if curl -fsS --max-time 3 "http://$lan_ip:8888/healthz"; then echo "SearXNG is reachable from the network"; exit 1; fi
+          conf="$HOME/.config/homemesh-searxng/settings.yml"
+          test "$(stat -c '%a %U' "$conf")" = "600 $(id -un)"
+          test "$(podman inspect -f '{{.Config.User}}' homemesh-searxng)" = "977:977"
+          podman top homemesh-searxng huser user | tee /dev/stderr | tail -n +2 | awk '{print $1}' | sort -u | grep -qx "$(id -un)"
+      - name: install-searxng.sh --remove keeps the settings
+        run: |
+          bash deploy/bazzite/install-searxng.sh --remove
+          test -f "$HOME/.config/homemesh-searxng/settings.yml"
+          if systemctl --user is-active --quiet homemesh-searxng; then echo "still running"; exit 1; fi
+      - name: Logs on failure
+        if: failure()
+        run: |
+          journalctl --user -u homemesh-searxng -n 100 --no-pager || true
+          podman ps -a || true
+          podman logs homemesh-searxng 2>&1 | tail -n 50 || true
 
   container:
     name: Container image build and run

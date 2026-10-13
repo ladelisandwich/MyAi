@@ -21,3 +21,13 @@ def run_quiet(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[Any
     if sys.platform == "win32":
         kwargs["creationflags"] = kwargs.get("creationflags", 0) | CREATE_NO_WINDOW
     return subprocess.run(args, **kwargs)
+
+
+def spawn_quiet(args: list[str], **kwargs: Any) -> subprocess.Popen[bytes]:
+    """Start a helper program without waiting for it, without a console window and without
+    sharing HomeMesh's standard streams (no shell is involved)."""
+    if sys.platform == "win32":
+        kwargs["creationflags"] = kwargs.get("creationflags", 0) | CREATE_NO_WINDOW
+    for stream in ("stdin", "stdout", "stderr"):
+        kwargs.setdefault(stream, subprocess.DEVNULL)
+    return subprocess.Popen(args, **kwargs)
