@@ -14,13 +14,14 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter, field_validator
 
 from homemesh.common.ids import new_id
 from homemesh.common.timeutil import now_iso
 from homemesh.protocol.hardware import HardwareReport, Telemetry
 from homemesh.protocol.jobs import GenerationMetrics
 from homemesh.protocol.models import BackendStatus, ModelInfo
+from homemesh.protocol.update import MAX_BUILD_BYTES, MAX_REPORT_BYTES, lenient_dict
 from homemesh.version import PROTOCOL_VERSION
 
 # WebSocket close codes (4000-4999 are application-defined).
@@ -68,6 +69,21 @@ class Hello(_Msg):
     allow_remote_mode_change: bool = True
     running_jobs: list[str] = Field(default_factory=list)  # jobs still running from a previous connection
     embedded: bool = False  # runs inside the coordinator process (standalone mode)
+    # Remote updater (additive; older coordinators ignore them). Plain dicts on purpose: the coordinator
+    # parses them with protocol.update.BuildInfo / UpdateRunReport separately, so a bad value can never
+    # invalidate the hello. None = an older worker, or a value that was not a dict or was too large.
+    build: dict[str, Any] | None = None  # protocol.update.BuildInfo, <= 4 KB
+    update: dict[str, Any] | None = None  # protocol.update.UpdateRunReport of the latest run, <= 8 KB
+
+    @field_validator("build", mode="before")
+    @classmethod
+    def _lenient_build(cls, v: Any) -> dict[str, Any] | None:
+        return lenient_dict(v, MAX_BUILD_BYTES)  # never raises
+
+    @field_validator("update", mode="before")
+    @classmethod
+    def _lenient_update(cls, v: Any) -> dict[str, Any] | None:
+        return lenient_dict(v, MAX_REPORT_BYTES)  # never raises
 
 
 class Heartbeat(_Msg):
@@ -76,6 +92,12 @@ class Heartbeat(_Msg):
     telemetry: Telemetry
     running_jobs: list[str] = Field(default_factory=list)
     mode: str
+    update: dict[str, Any] | None = None  # latest protocol.update.UpdateRunReport, <= 8 KB (see Hello.update)
+
+    @field_validator("update", mode="before")
+    @classmethod
+    def _lenient_update(cls, v: Any) -> dict[str, Any] | None:
+        return lenient_dict(v, MAX_REPORT_BYTES)  # never raises
 
 
 class CapabilitiesUpdate(_Msg):
@@ -127,6 +149,7 @@ class JobFailed(_Msg):
     error: str
     retryable: bool = False
     partial: dict[str, Any] | None = None
+    hint: str | None = None  # what the user can do (update.* jobs send one; additive, older peers ignore it)
 
 
 class JobCancelled(_Msg):

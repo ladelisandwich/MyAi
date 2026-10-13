@@ -10,7 +10,14 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-JobType = Literal["chat", "embed", "knowledge.scan", "tool.exec", "model.manage"]
+from homemesh.protocol.update import (
+    UpdateApplyPayload,
+    UpdateApplyResult,
+    UpdateCheckPayload,
+    UpdateCheckResult,
+)
+
+JobType = Literal["chat", "embed", "knowledge.scan", "tool.exec", "model.manage", "update.check", "update.apply"]
 JobStatus = Literal["queued", "dispatched", "running", "completed", "failed", "cancelled", "interrupted"]
 JobPriority = Literal["interactive", "normal", "background"]
 
@@ -18,7 +25,8 @@ TERMINAL_JOB_STATUSES = {"completed", "failed", "cancelled", "interrupted"}
 
 # Idempotent job types may be retried automatically after a worker disconnect or a
 # coordinator restart. Chat is NOT idempotent (it would duplicate a visible answer and may
-# trigger tool calls), so it is never retried automatically.
+# trigger tool calls), so it is never retried automatically. Neither is update.* (protocol.update):
+# those jobs are placed directly on one node and never queued or requeued.
 IDEMPOTENT_JOB_TYPES = {"embed", "knowledge.scan"}
 
 
@@ -205,6 +213,8 @@ PAYLOAD_SCHEMAS: dict[str, type[BaseModel]] = {
     "knowledge.scan": KnowledgeScanPayload,
     "tool.exec": ToolExecPayload,
     "model.manage": ModelManagePayload,
+    "update.check": UpdateCheckPayload,
+    "update.apply": UpdateApplyPayload,
 }
 
 RESULT_SCHEMAS: dict[str, type[BaseModel]] = {
@@ -213,6 +223,8 @@ RESULT_SCHEMAS: dict[str, type[BaseModel]] = {
     "knowledge.scan": KnowledgeScanResult,
     "tool.exec": ToolExecResult,
     "model.manage": ModelManageResult,
+    "update.check": UpdateCheckResult,
+    "update.apply": UpdateApplyResult,
 }
 
 

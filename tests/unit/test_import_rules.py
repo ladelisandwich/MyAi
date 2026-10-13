@@ -15,6 +15,7 @@ FORBIDDEN = {
     "tools": {"coordinator", "worker", "cli", "runtime"},
     "worker": {"coordinator", "cli", "runtime"},
     "coordinator": {"worker", "cli", "runtime"},
+    "update": {"coordinator", "worker", "cli", "runtime"},
 }
 
 

@@ -21,6 +21,7 @@ from homemesh.coordinator.db.repositories.memory import MemoryRepo
 from homemesh.coordinator.db.repositories.nodes import NodeRepo
 from homemesh.coordinator.db.repositories.system import AuditRepo, SettingsRepo
 from homemesh.coordinator.db.repositories.tools import ToolRepo
+from homemesh.coordinator.db.repositories.updates import UpdateRepo
 from homemesh.coordinator.db.repositories.users import ApiTokenRepo, SessionRepo, UserRepo
 
 
@@ -43,6 +44,7 @@ class Repositories:
     tools: ToolRepo
     settings: SettingsRepo
     audit: AuditRepo
+    updates: UpdateRepo
 
     @classmethod
     def create(cls, db: Database) -> Repositories:
@@ -51,5 +53,5 @@ class Repositories:
             projects=ProjectRepo(db), conversations=ConversationRepo(db), messages=MessageRepo(db),
             memories=MemoryRepo(db), collections=CollectionRepo(db), documents=DocumentRepo(db),
             chunks=ChunkRepo(db), embeddings=EmbeddingRepo(db), jobs=JobRepo(db), tools=ToolRepo(db),
-            settings=SettingsRepo(db), audit=AuditRepo(db),
+            settings=SettingsRepo(db), audit=AuditRepo(db), updates=UpdateRepo(db),
         )

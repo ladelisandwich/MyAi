@@ -10,7 +10,8 @@ from homemesh.coordinator.db.database import Row
 from homemesh.coordinator.db.repositories.base import Repo, decode, jdump
 
 _NODE_JSON = {"hardware_json": None, "telemetry_json": None, "limits_json": {}, "task_types": [],
-              "allowed_roots": [], "allowed_tools": [], "backends_json": []}
+              "allowed_roots": [], "allowed_tools": [], "backends_json": [], "build_json": None,
+              "update_check_json": None}
 
 
 class NodeRepo(Repo):
@@ -60,6 +61,16 @@ class NodeRepo(Repo):
         now = now_iso()
         await self.db.execute("UPDATE nodes SET telemetry_json=?, last_seen_at=?, connected=1 WHERE id=?",
                               (jdump(telemetry), now, node_id))
+
+    async def set_build(self, node_id: str, build: dict[str, Any] | None) -> None:
+        """What the node runs (``Hello.build`` parsed as ``protocol.update.BuildInfo`` and dumped, or
+        ``{"invalid": true}``), stored on every hello; None for a worker without the updater."""
+        await self.db.execute("UPDATE nodes SET build_json=? WHERE id=?", (jdump(build), node_id))
+
+    async def set_update_check(self, node_id: str, check: dict[str, Any] | None) -> None:
+        """The owner's last update check for this node: ``{job_id, checked_at, result}`` or
+        ``{job_id, checked_at, error: {code, message, hint}}`` (decoded as ``update_check_json``)."""
+        await self.db.execute("UPDATE nodes SET update_check_json=? WHERE id=?", (jdump(check), node_id))
 
     async def set_backends(self, node_id: str, backends: list[dict[str, Any]]) -> None:
         await self.db.execute("UPDATE nodes SET backends_json=?, updated_at=? WHERE id=?",
