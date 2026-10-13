@@ -198,17 +198,26 @@ def cmd_logs(ctx: Ctx) -> int:
     lines = log.read_text(encoding="utf-8", errors="replace").splitlines()[-ctx.args.lines:]
     print("\n".join(lines))
     if ctx.args.follow:
-        with log.open(encoding="utf-8", errors="replace") as fh:
-            fh.seek(0, os.SEEK_END)
-            try:
-                while True:
-                    line = fh.readline()
-                    if line:
-                        print(line, end="")
-                    else:
-                        time.sleep(0.5)
-            except KeyboardInterrupt:
-                pass
+        # Re-open the file for each read instead of holding it open: on Windows an open handle
+        # stops HomeMesh from rotating its log. A file that got smaller was rotated: start over.
+        pos = log.stat().st_size
+        try:
+            while True:
+                time.sleep(0.5)
+                try:
+                    size = log.stat().st_size
+                    if size < pos:
+                        pos = 0
+                    if size > pos:
+                        with log.open("rb") as fh:
+                            fh.seek(pos)
+                            data = fh.read(size - pos)
+                        pos += len(data)
+                        print(data.decode("utf-8", errors="replace"), end="", flush=True)
+                except FileNotFoundError:
+                    pos = 0
+        except KeyboardInterrupt:
+            pass
     return EXIT_OK
 
 
@@ -834,6 +843,7 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+DETACHED_ENV = "HOMEMESH_DETACHED"  # same name as cli.service.DETACHED_ENV
 _ASCII_FALLBACK = {"✓": "[ok]", "✗": "[x]", "●": "*", "○": "o", "→": "->", "…": "...", "·": "-", "—": "-",
                    "\u2013": "-", "≈": "~", "≥": ">=", "≤": "<="}
 
@@ -845,18 +855,60 @@ def _ascii_fallback(exc: UnicodeError) -> tuple[str, int]:
     return "".join(_ASCII_FALLBACK.get(ch, "?") for ch in text), exc.end
 
 
+def _console_output_codepage() -> int:
+    """The code page Windows PowerShell and cmd use to read a program's piped output (0 = none)."""
+    if sys.platform != "win32":
+        return 0
+    try:
+        import ctypes
+
+        return int(ctypes.windll.kernel32.GetConsoleOutputCP())  # type: ignore[attr-defined]
+    except (OSError, AttributeError, ValueError):
+        return 0
+
+
 def _make_output_safe() -> None:
     """Never crash on output: a Windows console redirected to a file or pipe uses a legacy code
-    page (e.g. cp1252) that cannot encode symbols such as ✓, so map them to ASCII there."""
+    page (e.g. cp1252) that cannot encode symbols such as ✓, so map them to ASCII there.
+
+    On Windows, piped output (e.g. ``notepad (homemesh config path)`` in PowerShell) is also written
+    in the console's code page, which is what PowerShell decodes it with; Python would otherwise use
+    the ANSI code page and a folder name such as "José" would come out garbled."""
     codecs.register_error("homemesh_ascii", _ascii_fallback)
+    cp = 0 if os.environ.get("PYTHONIOENCODING") else _console_output_codepage()
     for stream in (sys.stdout, sys.stderr):
         if stream is None:  # pythonw has no console streams
             continue
+        if cp and not stream.isatty():
+            with contextlib.suppress(AttributeError, ValueError, LookupError):
+                stream.reconfigure(encoding=f"cp{cp}" if cp != 65001 else "utf-8")
         try:
             "✓✗●→…".encode(stream.encoding or "ascii")
         except (UnicodeEncodeError, LookupError):
             with contextlib.suppress(AttributeError, ValueError):
                 stream.reconfigure(errors="homemesh_ascii")
+
+
+def _capture_console(argv: list[str]) -> None:
+    """Background runs (the Windows autostart entry runs pythonw.exe, which has no console at all;
+    'homemesh start' detaches) would lose anything printed before logging starts, such as a broken
+    homemesh.toml. Send it to <data>/logs/console.log instead, kept small."""
+    from datetime import datetime
+
+    from homemesh.common.paths import default_paths
+
+    try:
+        logs = default_paths().logs_dir
+        logs.mkdir(parents=True, exist_ok=True)
+        path = logs / "console.log"
+        if path.exists() and path.stat().st_size > 1024 * 1024:
+            os.replace(path, logs / "console.log.1")
+        fh = open(path, "a", encoding="utf-8", errors="replace", buffering=1)
+    except OSError:
+        return
+    fh.write(f"--- {datetime.now().isoformat(timespec='seconds')} pid {os.getpid()}: homemesh {' '.join(argv)}\n")
+    sys.stdout = sys.stderr = fh
+    os.environ[DETACHED_ENV] = "1"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -868,6 +920,8 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_USAGE
     if args.home:
         os.environ["HOMEMESH_HOME"] = args.home
+    if sys.stdout is None or sys.stderr is None or os.environ.get(DETACHED_ENV) == "1":
+        _capture_console(sys.argv[1:] if argv is None else argv)
     try:
         return int(args.func(Ctx(args)) or 0)
     except KeyboardInterrupt:

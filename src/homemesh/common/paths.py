@@ -72,6 +72,11 @@ class AppPaths:
         return self.data_dir / "homemesh.pid"
 
     @property
+    def lock_file(self) -> Path:
+        """Locked by the running HomeMesh process for its whole lifetime (one instance per data folder)."""
+        return self.data_dir / "homemesh.lock"
+
+    @property
     def stop_request_file(self) -> Path:
         """Created by ``homemesh stop``; the running process watches for it (works on every OS,
         including Windows where a windowless process cannot receive a console signal)."""
@@ -91,15 +96,48 @@ class AppPaths:
 
 def ensure_private_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
-    if os.name == "posix":
+    if sys.platform == "win32":
+        if not _inside_user_profile(path):
+            _restrict_windows_acl(path)
+    elif os.name == "posix":
         os.chmod(path, 0o700)
+
+
+def _inside_user_profile(path: Path) -> bool:
+    profile = os.environ.get("USERPROFILE")
+    if not profile:
+        return False
+    try:
+        path.resolve().relative_to(Path(profile).resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _restrict_windows_acl(path: Path) -> None:
+    """Folders under the user profile inherit an ACL private to that user. Elsewhere (HOMEMESH_HOME on
+    another drive) the inherited ACL may let other local users read keys and tokens, so replace it
+    with: this user and SYSTEM only. Uses Windows' own icacls on a folder this user created; no admin
+    rights needed. Best effort: if it fails, `homemesh doctor` reports it."""
+    from homemesh.common.proc import run_quiet
+
+    user = os.environ.get("USERNAME") or ""
+    domain = os.environ.get("USERDOMAIN") or ""
+    if not user:
+        return
+    account = f"{domain}\\{user}" if domain else user
+    try:
+        run_quiet(["icacls", str(path), "/inheritance:r", "/grant:r", f"{account}:(OI)(CI)F",
+                   "/grant:r", "*S-1-5-18:(OI)(CI)F"], capture_output=True, check=False, timeout=30)
+    except (OSError, ValueError):
+        pass
 
 
 def write_private_file(path: Path, data: str | bytes) -> None:
     """Write a file readable only by the current user (0600 on POSIX).
 
-    On Windows the file inherits the ACL of the per-user profile directory
-    (``%LOCALAPPDATA%``), which is already private to the user.
+    On Windows the file inherits the ACL of its folder: private to the user under the profile
+    (``%LOCALAPPDATA%``), and restricted by :func:`ensure_private_dir` elsewhere.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     mode = "wb" if isinstance(data, bytes) else "w"

@@ -61,6 +61,26 @@ First working version.
 
 ### Fixed during development (found by CI and real-process testing)
 
+* Windows desktop review (found by a code review of the Windows paths, each finding independently
+  verified; covered by tests where a test can show it):
+  * a second HomeMesh process (autostart racing `homemesh start`, or `homemesh run` next to the
+    background one) ran crash recovery against the live database; an OS lock now allows one per data
+    folder, taken before anything else;
+  * after a logoff the PID file could point at a recycled PID, so `start` refused and `stop --force`
+    could terminate an unrelated program; the PID record now includes the process start time;
+  * log rotation lost records and deleted old logs while `homemesh logs -f` (or an editor) held the
+    log open; `logs -f` no longer holds it, and rotation waits instead of failing;
+  * errors before logging started (e.g. a broken config) vanished in windowless autostart runs; they
+    now go to `logs/console.log`; background runs no longer copy the whole log into an unrotated file;
+  * document scans downloaded OneDrive cloud-only files and followed NTFS junctions out of the folder;
+  * waking from sleep dropped every connected computer (Windows' monotonic clock counts sleep time);
+  * the GPU query could fail on non-ASCII output and keep the worker from connecting;
+  * secrets folders outside the user profile (`HOMEMESH_HOME` on another drive) got no owner-only ACL;
+  * `homemesh doctor` reported a busy port as free on Windows;
+  * `install.ps1` garbled the Python path for non-ASCII profile names; upgrades kept the old web UI
+    (both installers now rebuild it when its sources changed); piped CLI output was garbled for
+    non-ASCII paths; `setup` didn't say that a running instance needs a restart.
+
 * Backup verification left the extracted database open, which broke verify/restore on Windows.
 * CLI output crashed on Windows when redirected (legacy code page); now falls back to ASCII symbols.
 * `homemesh stop` could not stop a windowless process on Windows; a stop-request file now provides

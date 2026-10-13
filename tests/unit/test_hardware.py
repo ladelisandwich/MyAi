@@ -181,3 +181,27 @@ def test_ignored_gpus_are_shown_but_not_counted():
         "0, NVIDIA GeForce RTX 3080, GPU-y, 580.1, 10240, 1000, 9240, 3, 40, 00000000:01:00.0, 8.6", QUERY_FIELDS))
     assert vram_view(HardwareReport.model_construct(gpus=nv), Telemetry(gpus=[GPUTelemetry(index=0, vram_free_mb=9000)])) == (10240, 9000, True)
     assert vram_view(HardwareReport.model_construct(gpus=[]), None) == (None, None, False)
+
+
+def test_windows_gpu_query_survives_non_ascii_output(monkeypatch):
+    import subprocess
+
+    from homemesh.hardware import gpu_windows
+
+    data = {"controllers": [{"Name": "AMD Radeon™ RX 5700 (Ünicode)", "AdapterRAM": 4293918720,
+                             "DriverVersion": "31.0", "PNPDeviceID": "PCI\\VEN_1002"}], "registry": []}
+    seen = {}
+
+    def fake_run(args, **kw):
+        seen.update(kw, cmd=args[-1])
+        return subprocess.CompletedProcess(args, 0, "﻿".encode() + json.dumps(data, ensure_ascii=False).encode(), b"")
+
+    monkeypatch.setattr(gpu_windows, "run_quiet", fake_run)
+    gpus, notes = gpu_windows.detect_windows_gpus()
+    assert notes == [] and gpus[0].name == "AMD Radeon™ RX 5700 (Ünicode)"
+    assert "text" not in seen and seen["cmd"].startswith("[Console]::OutputEncoding")
+    # Bytes that are not valid UTF-8 (e.g. an ANSI code page) must not raise either.
+    monkeypatch.setattr(gpu_windows, "run_quiet",
+                        lambda args, **kw: subprocess.CompletedProcess(args, 0, b'{"controllers": [{"Name": "\xe9"}]}', b""))
+    gpus, notes = gpu_windows.detect_windows_gpus()
+    assert isinstance(gpus, list)

@@ -27,6 +27,17 @@ This is deliberate. Run `homemesh tls init` (sets `tls_mode = "self_signed"`), u
 (`tls_mode = "proxy"` with `host = "127.0.0.1"`), or, only on a network you fully trust, set
 `allow_insecure_lan = true`.
 
+**"HomeMesh is already running for …"**
+Only one HomeMesh runs per data folder (an OS lock guarantees it), so a second `homemesh run` or a
+`homemesh start` racing the login autostart exits before touching the database. Use `homemesh status`,
+or `homemesh stop` first. `homemesh setup` on a computer where autostart already started HomeMesh tells
+you to `homemesh restart` to apply the new settings.
+
+**HomeMesh doesn't start at login, and `homemesh logs` shows nothing new**
+Errors that happen before logging starts (for example a mistake in `homemesh.toml`) are written to
+`console.log` next to `homemesh.log` (`homemesh config path` shows the folder; on Windows
+`%LOCALAPPDATA%\HomeMesh\logs\console.log`). `homemesh config validate` checks the file.
+
 **Port already in use**
 `homemesh doctor` shows it. Another HomeMesh may already be running (`homemesh status`), or change
 `server.port`.
@@ -156,6 +167,12 @@ always refused.
 No embedding model is configured or online. `ollama pull nomic-embed-text`, then set Models → Model roles
 → Embeddings. Existing chunks are embedded automatically (Knowledge → Embed missing).
 
+**OneDrive files show "cloud-only file … skipped"**
+With OneDrive Files On-Demand (or another sync client), files that are only in the cloud are not
+read, because reading them would make Windows download the whole folder. Right-click the folder →
+**Always keep on this device**, then rescan. Junctions and symbolic links inside an indexed folder
+are never followed out of it.
+
 **PDF shows `needs_ocr`**
 The PDF contains scanned images without a text layer. OCR isn't included in v0.1.0. Run it through an OCR
 tool (e.g. `ocrmypdf`) and rescan.
@@ -253,7 +270,13 @@ The passphrase is wrong or the file was modified. There is no recovery without t
   back on without reinstalling. Microsoft Defender antivirus keeps running either way.
 
 * `homemesh stop` asks the process to stop via a stop-request file. If it doesn't stop within 30 s,
-  `homemesh stop --force` terminates it (interrupted jobs are recorded on the next start).
+  `homemesh stop --force` terminates it (interrupted jobs are recorded on the next start). HomeMesh
+  records its process's start time with the PID, so after a logoff or reboot a recycled PID that
+  now belongs to another program is never treated as HomeMesh, let alone terminated.
+* After the PC wakes from sleep, connected computers get a fresh heartbeat timeout instead of being
+  dropped.
+* Keep `homemesh logs -f` open as long as you like: it no longer blocks log rotation, and if another
+  program holds the log open, HomeMesh keeps writing and rotates later instead of losing records.
 * If Windows Defender SmartScreen or the firewall prompts when the coordinator first listens on the
   network, allow **Private** networks only. Workers need no inbound rule.
 * Antivirus software that scans the data folder can slow down SQLite. Excluding the data folder is your

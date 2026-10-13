@@ -128,3 +128,45 @@ def test_json_roundtrip_of_records():
 
     rec = DocumentRecord(rel_path="a", size=1, mtime=1.0, status="indexed")
     assert DocumentRecord.model_validate(json.loads(rec.model_dump_json())) == rec
+
+
+def test_scanner_skips_cloud_only_files_and_links_out_of_the_folder(tmp_path, monkeypatch):
+    import sys
+
+    from fsutil import symlink_or_skip
+    from homemesh.knowledge import scanner
+    from homemesh.protocol.jobs import KnowledgeScanPayload
+
+    root = tmp_path / "docs"
+    root.mkdir()
+    (root / "local.md").write_text("# Local\n\nOn this computer.\n")
+    (root / "cloud.md").write_text("placeholder")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.md").write_text("must not be indexed")
+    if sys.platform == "win32":
+        import _winapi
+
+        _winapi.CreateJunction(str(outside), str(root / "junction"))  # no admin rights needed
+    else:
+        symlink_or_skip(outside, root / "linked")
+    files = [rel for _, rel in scanner.iter_files(root, [], [])]
+    assert files == ["cloud.md", "local.md"]  # nothing reached through the junction/link
+
+    class CloudStat:
+        def __init__(self, st):
+            self._st = st
+            self.st_file_attributes = 0x00400000  # FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
+
+        def __getattr__(self, name):
+            return getattr(self._st, name)
+
+    cloud = root / "cloud.md"
+    orig = type(cloud).stat
+    monkeypatch.setattr(type(cloud), "stat", lambda self, **kw: CloudStat(orig(self, **kw))
+                        if self.name == "cloud.md" else orig(self, **kw))
+    read = []
+    monkeypatch.setattr(type(cloud), "read_bytes", lambda self: read.append(self.name) or b"x")
+    payload = KnowledgeScanPayload(collection_id="c", root_path=str(root), known={})
+    rec = scanner.process_file(cloud, "cloud.md", payload)
+    assert rec.status == "error" and "cloud-only" in rec.error and read == []

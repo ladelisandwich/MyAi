@@ -84,15 +84,19 @@ def parse_windows_gpu_json(text: str) -> list[GPUInfo]:
 
 def detect_windows_gpus() -> tuple[list[GPUInfo], list[str]]:
     try:
+        # Ask PowerShell for UTF-8 and decode it ourselves: with text=True Python would use the ANSI
+        # code page, and a driver or GPU name it can't decode would stop the worker from starting.
         proc = run_quiet(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", _PS_SCRIPT],
-            capture_output=True, text=True, timeout=30, check=False,
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; " + _PS_SCRIPT],
+            capture_output=True, timeout=30, check=False,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return [], [f"Windows GPU query failed: {exc}"]
-    if proc.returncode != 0 or not proc.stdout.strip():
+    out = (proc.stdout or b"").decode("utf-8", errors="replace").lstrip("\ufeff")
+    if proc.returncode != 0 or not out.strip():
         return [], ["Windows GPU query returned no data (PowerShell/CIM unavailable)"]
     try:
-        return parse_windows_gpu_json(proc.stdout), []
-    except (json.JSONDecodeError, TypeError, AttributeError) as exc:
+        return parse_windows_gpu_json(out), []
+    except (ValueError, TypeError, AttributeError, KeyError) as exc:
         return [], [f"Could not parse Windows GPU information: {exc}"]

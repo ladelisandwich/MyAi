@@ -12,6 +12,7 @@ import asyncio
 import fnmatch
 import hashlib
 import os
+import stat
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -23,6 +24,34 @@ from homemesh.protocol.jobs import DocumentRecord, KnowledgeScanPayload, Knowled
 
 MAX_FILES = 50_000
 CHUNKS_PER_MESSAGE = 200
+# Windows file attributes of cloud placeholders (OneDrive Files On-Demand and other sync clients):
+# reading such a file makes Windows download it, so the scanner never opens them.
+_CLOUD_ONLY_ATTRS = 0x00001000 | 0x00040000 | 0x00400000  # OFFLINE | RECALL_ON_OPEN | RECALL_ON_DATA_ACCESS
+# Reparse points that redirect elsewhere: NTFS junctions / mount points and symbolic links.
+_REDIRECT_TAGS = {0xA0000003, 0xA000000C}  # IO_REPARSE_TAG_MOUNT_POINT, IO_REPARSE_TAG_SYMLINK
+
+
+def _redirects(path: Path) -> bool:
+    """Symlink, or on Windows an NTFS junction, which os.walk would otherwise follow out of the folder."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return True
+    if stat.S_ISLNK(st.st_mode):
+        return True
+    return getattr(st, "st_reparse_tag", 0) in _REDIRECT_TAGS
+
+
+def _inside(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root)
+    except (OSError, ValueError, RuntimeError):
+        return False
+    return True
+
+
+def cloud_only(st: os.stat_result) -> bool:
+    return bool(getattr(st, "st_file_attributes", 0) & _CLOUD_ONLY_ATTRS)
 
 
 def _included(rel: str, include_globs: list[str]) -> bool:
@@ -34,12 +63,14 @@ def _included(rel: str, include_globs: list[str]) -> bool:
 def iter_files(root: Path, exclude_dirs: list[str], include_globs: list[str]) -> list[tuple[Path, str]]:
     out: list[tuple[Path, str]] = []
     excluded = set(exclude_dirs)
+    real_root = root.resolve()
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         dirnames[:] = sorted(d for d in dirnames
-                             if d not in excluded and not d.startswith(".") and not is_sensitive(Path(dirpath, d)))
+                             if d not in excluded and not d.startswith(".") and not is_sensitive(Path(dirpath, d))
+                             and not _redirects(Path(dirpath, d)))
         for fn in sorted(filenames):
             p = Path(dirpath, fn)
-            if fn.startswith(".") or p.is_symlink() or is_sensitive(p):
+            if fn.startswith(".") or _redirects(p) or is_sensitive(p) or not _inside(p, real_root):
                 continue
             rel = p.relative_to(root).as_posix()
             if not supported(p) or not _included(rel, include_globs):
@@ -52,6 +83,11 @@ def iter_files(root: Path, exclude_dirs: list[str], include_globs: list[str]) ->
 
 def process_file(path: Path, rel: str, payload: KnowledgeScanPayload) -> DocumentRecord:
     st = path.stat()
+    if cloud_only(st):
+        return DocumentRecord(rel_path=rel, size=st.st_size, mtime=st.st_mtime, status="error",
+                              error="cloud-only file (e.g. OneDrive Files On-Demand): not on this computer, so "
+                                    "HomeMesh skipped it instead of making Windows download it. Choose 'Always keep "
+                                    "on this device' for the folder to index it.")
     known = payload.known.get(rel)
     if known and known.size == st.st_size and abs(known.mtime - st.st_mtime) < 1e-6:
         return DocumentRecord(rel_path=rel, size=st.st_size, mtime=st.st_mtime, content_hash=known.content_hash,

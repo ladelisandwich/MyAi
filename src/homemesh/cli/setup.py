@@ -215,7 +215,14 @@ def run_setup(args: argparse.Namespace, paths: AppPaths) -> int:
         print(f"✗ {exc.message}")
         return 1
     _offer_service(args, paths, interactive)
-    print(f"\nDone. Start HomeMesh with 'homemesh start' (or 'homemesh run') and open {cfg.advertised_url()}")
+    from homemesh.cli import service
+
+    if service.read_pid(paths):
+        # Typically the autostart entry already started HomeMesh with the old settings.
+        print(f"\nDone. HomeMesh is already running with the previous settings: run 'homemesh restart' to apply "
+              f"them, then open {cfg.advertised_url()}")
+    else:
+        print(f"\nDone. Start HomeMesh with 'homemesh start' (or 'homemesh run') and open {cfg.advertised_url()}")
     if cfg.server.tls_mode == "self_signed":
         print("Your browser will warn about the private certificate until you trust the HomeMesh CA "
               "(see INSTALLATION.md → 'Trusting the HomeMesh certificate').")

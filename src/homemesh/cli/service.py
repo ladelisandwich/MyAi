@@ -19,9 +19,11 @@ import sys
 import time
 from pathlib import Path
 
+from homemesh.common.instance import lock_is_held, read_pid_record
 from homemesh.common.paths import AppPaths
 from homemesh.common.proc import run_quiet
 
+DETACHED_ENV = "HOMEMESH_DETACHED"  # set for background runs: no console, see cli.main
 UNIT_NAME = "homemesh.service"
 AUTOSTART_NAME = "HomeMesh"
 WIN_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -155,20 +157,15 @@ def service_installed() -> bool:
 
 
 def read_pid(paths: AppPaths) -> int | None:
-    try:
-        pid = int(paths.pid_file.read_text().strip())
-    except (OSError, ValueError):
+    """PID of the HomeMesh process running for this data folder, or None.
+
+    Running means: the instance lock is held AND the PID record matches a live process that started
+    at the recorded time. A PID left behind by a process Windows ended at logoff may by now belong to
+    another program; it is never reported (or stopped) as HomeMesh.
+    """
+    if not lock_is_held(paths.lock_file):
         return None
-    return pid if pid_alive(pid) else None
-
-
-def pid_alive(pid: int) -> bool:
-    try:
-        import psutil
-
-        return psutil.pid_exists(pid) and psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
-    except Exception:
-        return False
+    return read_pid_record(paths.pid_file)
 
 
 def start(paths: AppPaths) -> str:
@@ -177,10 +174,11 @@ def start(paths: AppPaths) -> str:
     if sys.platform.startswith("linux") and unit_path().exists() and systemd_available():
         r = run_quiet(["systemctl", "--user", "start", UNIT_NAME], capture_output=True, text=True, check=False)
         return "Started via systemd." if r.returncode == 0 else f"systemctl failed: {r.stderr.strip()}"
-    # Portable fallback: detached background process logging to the data directory.
+    # Portable fallback: a detached background process. It logs to homemesh.log; anything printed
+    # before logging starts (e.g. a broken config file) goes to console.log (see cli.main).
     paths.logs_dir.mkdir(parents=True, exist_ok=True)
-    log = open(paths.logs_dir / "background.log", "ab")
-    kwargs: dict = {"stdout": log, "stderr": subprocess.STDOUT, "stdin": subprocess.DEVNULL}
+    kwargs: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "stdin": subprocess.DEVNULL,
+                    "env": {**os.environ, DETACHED_ENV: "1"}}
     if sys.platform == "win32":
         kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
     else:
@@ -190,7 +188,8 @@ def start(paths: AppPaths) -> str:
         time.sleep(0.2)
         if read_pid(paths):
             return f"Started in the background (logs: {paths.logs_dir / 'homemesh.log'})."
-    return f"Started; it is taking a while to come up - check {paths.logs_dir / 'background.log'}."
+    return (f"Started; it is taking a while to come up - check {paths.logs_dir / 'homemesh.log'} "
+            f"and {paths.logs_dir / 'console.log'}.")
 
 
 def stop(paths: AppPaths, timeout: float = 30.0, *, force: bool = False) -> str:
@@ -209,10 +208,12 @@ def stop(paths: AppPaths, timeout: float = 30.0, *, force: bool = False) -> str:
         os.kill(pid, signal.SIGTERM)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if not pid_alive(pid):
+        if read_pid(paths) != pid:
             return "Stopped."
         time.sleep(0.3)
     if force:
+        if read_pid(paths) != pid:  # verified again right before terminating anything
+            return "Stopped."
         if sys.platform == "win32":
             run_quiet(["taskkill", "/F", "/PID", str(pid)], capture_output=True, check=False)
         else:

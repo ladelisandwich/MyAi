@@ -22,8 +22,9 @@ import uvicorn
 
 from homemesh.common.config import HomeMeshConfig
 from homemesh.common.errors import ConfigError
+from homemesh.common.instance import InstanceLock, read_pid_record, write_pid_record
 from homemesh.common.logging import get_logger, setup_logging
-from homemesh.common.paths import AppPaths, write_private_file
+from homemesh.common.paths import AppPaths
 
 log = get_logger(__name__)
 
@@ -64,6 +65,26 @@ async def run_roles(cfg: HomeMeshConfig, paths: AppPaths, roles: list[str] | Non
         for p in problems:
             log.error("Refusing to start: %s", p)
         return 2
+    # One HomeMesh per data folder, decided before anything touches the database: a second process
+    # (autostart racing 'homemesh start', or 'homemesh run' next to the background one) would
+    # otherwise run crash recovery against the live instance's jobs.
+    lock = InstanceLock(paths.lock_file)
+    if not lock.acquire():
+        other = read_pid_record(paths.pid_file)
+        log.error("HomeMesh is already running for %s%s. Use 'homemesh status', or 'homemesh stop' first.",
+                  paths.data_dir, f" (process {other})" if other else "")
+        return 2
+    try:
+        write_pid_record(paths.pid_file)
+        return await _run_locked(cfg, paths, roles, install_signal_handlers, stop_event)
+    finally:
+        with contextlib.suppress(OSError):
+            paths.pid_file.unlink()
+        lock.release()
+
+
+async def _run_locked(cfg: HomeMeshConfig, paths: AppPaths, roles: list[str], install_signal_handlers: bool,
+                      stop_event: asyncio.Event | None) -> int:
     server: uvicorn.Server | None = None
     agent = None
     tasks: list[asyncio.Task[object]] = []
@@ -83,7 +104,6 @@ async def run_roles(cfg: HomeMeshConfig, paths: AppPaths, roles: list[str] | Non
         server = uvicorn.Server(uv_cfg)
         server.install_signal_handlers = lambda: None  # type: ignore[method-assign]  # we handle signals
         tasks.append(asyncio.create_task(server.serve(), name="uvicorn"))
-        write_private_file(paths.pid_file, str(os.getpid()))
 
         if "worker" in roles:
             async def start_embedded_worker() -> None:
@@ -114,7 +134,6 @@ async def run_roles(cfg: HomeMeshConfig, paths: AppPaths, roles: list[str] | Non
         except ConfigError as exc:
             log.error("%s %s", exc.message, exc.hint or "")
             return 2
-        write_private_file(paths.pid_file, str(os.getpid()))
         tasks.append(asyncio.create_task(agent.run(), name="worker"))
     else:
         log.error("Nothing to run: this computer is configured for roles %s. The 'client' role only needs a "
@@ -149,13 +168,13 @@ async def run_roles(cfg: HomeMeshConfig, paths: AppPaths, roles: list[str] | Non
                 await asyncio.wait_for(t, timeout=15)
     stopper.cancel()
     watcher.cancel()
-    with contextlib.suppress(OSError):
-        paths.pid_file.unlink()
     return exit_code
 
 
 def run_foreground(cfg: HomeMeshConfig, paths: AppPaths, roles: list[str] | None = None) -> int:
-    setup_logging(cfg.logging.level, cfg.logging.format, paths.logs_dir, cfg.logging.to_file)
+    # Detached runs have no console to log to; homemesh.log has everything.
+    setup_logging(cfg.logging.level, cfg.logging.format, paths.logs_dir, cfg.logging.to_file,
+                  console=os.environ.get("HOMEMESH_DETACHED") != "1")
     try:
         return asyncio.run(run_roles(cfg, paths, roles))
     except KeyboardInterrupt:

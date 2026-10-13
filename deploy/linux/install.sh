@@ -49,10 +49,23 @@ PY
 say "Using $("$PYTHON" --version) at $PYTHON"
 
 # ---- Web UI -------------------------------------------------------------------------
-if [ ! -f "$ROOT/src/homemesh/web_dist/index.html" ]; then
+# Build it when it is missing or older than its sources (after 'git pull'), so an upgrade never
+# pairs a new backend with an old web interface.
+WEB_INDEX="$ROOT/src/homemesh/web_dist/index.html"
+WEB_STALE=0
+if [ ! -f "$WEB_INDEX" ]; then
+  WEB_STALE=1
+elif [ -n "$(cd "$ROOT/apps/web" && find src public index.html package.json package-lock.json vite.config.ts \
+             -newer "$WEB_INDEX" -type f -print -quit 2>/dev/null)" ]; then
+  WEB_STALE=1
+fi
+if [ "$WEB_STALE" = 1 ]; then
   if [ "$BUILD_WEB" = 1 ] && command -v npm >/dev/null 2>&1; then
     say "Building the web interface…"
     "$ROOT/scripts/build_web.sh"
+  elif [ -f "$WEB_INDEX" ]; then
+    echo "Note: the web interface sources changed but Node.js/npm is not available (or --no-web);"
+    echo "      the previously built web UI is used. Install Node.js 20.19+ and run scripts/build_web.sh."
   else
     echo "Note: no prebuilt web UI found and Node.js/npm is not available (or --no-web)."
     echo "      The API and CLI will work; install Node.js 20.19+ and run scripts/build_web.sh for the UI."

@@ -121,3 +121,135 @@ def test_systemd_unit_waits_for_setup_and_does_not_loop_on_config_errors(tmp_pat
     unit = render_unit(AppPaths(config_dir=tmp_path / "cfg", data_dir=tmp_path / "data"))
     assert f"ConditionPathExists={tmp_path / 'cfg' / 'homemesh.toml'}" in unit
     assert "RestartPreventExitStatus=2" in unit
+
+
+def test_only_one_homemesh_per_data_folder(tmp_path):
+    from homemesh.common.instance import InstanceLock, lock_is_held
+
+    lock_path = tmp_path / "homemesh.lock"
+    first = InstanceLock(lock_path)
+    assert first.acquire() and lock_is_held(lock_path)
+    assert not InstanceLock(lock_path).acquire()
+    first.release()
+    assert not lock_is_held(lock_path)
+    again = InstanceLock(lock_path)
+    assert again.acquire()
+    again.release()
+
+
+async def test_second_instance_exits_before_touching_the_database(tmp_path):
+    from homemesh.common.config import HomeMeshConfig
+    from homemesh.common.instance import InstanceLock
+    from homemesh.common.paths import default_paths
+    from homemesh.runtime import run_roles
+
+    paths = default_paths(tmp_path)
+    paths.ensure()
+    running = InstanceLock(paths.lock_file)
+    assert running.acquire()  # stands in for the instance that is already running
+    try:
+        code = await run_roles(HomeMeshConfig(), paths, install_signal_handlers=False)
+    finally:
+        running.release()
+    assert code == 2
+    assert not paths.db_file.exists()  # no crash recovery against the live instance's data
+
+
+def test_a_reused_pid_is_never_taken_for_homemesh(tmp_path, monkeypatch):
+    import json
+    import os
+
+    from homemesh.cli import service
+    from homemesh.common.instance import InstanceLock, read_pid_record, write_pid_record
+    from homemesh.common.paths import default_paths
+
+    paths = default_paths(tmp_path)
+    paths.ensure()
+    write_pid_record(paths.pid_file)
+    assert read_pid_record(paths.pid_file) == os.getpid()
+    # Same PID, different start time: the number was reused by another program.
+    paths.pid_file.write_text(json.dumps({"pid": os.getpid(), "started": 12345.0}))
+    assert read_pid_record(paths.pid_file) is None
+    # Old bare-PID format: only trusted if that process is HomeMesh (this test process is not).
+    paths.pid_file.write_text(str(os.getpid()))
+    assert read_pid_record(paths.pid_file) is None
+    # Without the instance lock nothing counts as running, so stop never touches the process.
+    write_pid_record(paths.pid_file)
+    killed = []
+    monkeypatch.setattr(service.os, "kill", lambda *a: killed.append(a))
+    monkeypatch.setattr(service, "run_quiet", lambda *a, **k: killed.append(a))
+    monkeypatch.setattr(service, "unit_path", lambda: tmp_path / "no-unit")
+    assert service.read_pid(paths) is None
+    assert service.stop(paths, timeout=0.1, force=True) == "HomeMesh is not running."
+    assert killed == []
+    lock = InstanceLock(paths.lock_file)
+    assert lock.acquire()
+    try:
+        assert service.read_pid(paths) == os.getpid()
+    finally:
+        lock.release()
+
+
+def test_log_rotation_waits_while_the_file_cannot_be_renamed(tmp_path, monkeypatch):
+    import logging
+
+    from homemesh.common import logging as hm_logging
+
+    path = tmp_path / "homemesh.log"
+    h = hm_logging.SafeRotatingFileHandler(path, maxBytes=200, backupCount=2, encoding="utf-8")
+    h.setFormatter(logging.Formatter("%(message)s"))
+    (tmp_path / "homemesh.log.1").write_text("old backup\n")
+    real_replace = hm_logging.os.replace
+
+    def locked(src, dst):  # what Windows does while another program has the log open
+        if str(src) == str(path):
+            raise PermissionError("in use")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(hm_logging.os, "replace", locked)
+    rec = logging.LogRecord("t", logging.INFO, __file__, 1, "x" * 80, None, None)
+    for _ in range(10):
+        h.emit(rec)
+    assert path.read_text().count("x" * 80) == 10  # nothing dropped
+    assert (tmp_path / "homemesh.log.1").read_text() == "old backup\n"  # history not shifted or deleted
+    monkeypatch.setattr(hm_logging.os, "replace", real_replace)
+    h._blocked_until = 0.0
+    h.emit(rec)
+    h.close()
+    assert (tmp_path / "homemesh.log.1").read_text().count("x" * 80) == 10
+    assert (tmp_path / "homemesh.log.2").read_text() == "old backup\n"
+
+
+def test_doctor_port_check_sees_a_busy_port():
+    import socket
+
+    from homemesh.cli.doctor import _port
+    from homemesh.common.config import HomeMeshConfig
+
+    busy = socket.socket()
+    busy.bind(("127.0.0.1", 0))
+    busy.listen()
+    try:
+        cfg = HomeMeshConfig()
+        cfg.server.host = "127.0.0.1"
+        cfg.server.port = busy.getsockname()[1]
+        assert _port(cfg, running=False).status == "fail"
+    finally:
+        busy.close()
+    assert _port(cfg, running=False).status == "ok"
+
+
+def test_piped_output_on_windows_uses_the_console_code_page(monkeypatch):
+    import io
+
+    from homemesh.cli import main as cli_main
+
+    out = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+    monkeypatch.setattr(cli_main.sys, "stdout", out)
+    monkeypatch.setattr(cli_main.sys, "stderr", io.TextIOWrapper(io.BytesIO(), encoding="cp1252"))
+    monkeypatch.delenv("PYTHONIOENCODING", raising=False)
+    monkeypatch.setattr(cli_main, "_console_output_codepage", lambda: 850)  # Western European OEM
+    cli_main._make_output_safe()
+    print("C:\\Users\\José\\AppData ✓", file=out, end="")
+    out.flush()
+    assert out.buffer.getvalue().decode("cp850") == "C:\\Users\\José\\AppData [ok]"

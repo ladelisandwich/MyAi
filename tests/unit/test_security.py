@@ -115,3 +115,42 @@ def test_calculator_math():
 def test_calculator_rejects_unsafe_or_huge(expr):
     with pytest.raises(CalcError):
         safe_eval(expr)
+
+
+def test_secret_folders_outside_the_windows_profile_get_an_owner_only_acl(tmp_path, monkeypatch):
+    from homemesh.common import paths as paths_mod
+    from homemesh.common import proc
+
+    calls = []
+    monkeypatch.setattr(paths_mod.sys, "platform", "win32")
+    monkeypatch.setattr(proc, "run_quiet", lambda args, **kw: calls.append(args))
+    monkeypatch.setenv("USERNAME", "ahearn")
+    monkeypatch.setenv("USERDOMAIN", "PLEX_SERVER")
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "profile"))
+    paths_mod.ensure_private_dir(tmp_path / "profile" / "AppData" / "secrets")
+    assert calls == []  # inside the profile: already private
+    paths_mod.ensure_private_dir(tmp_path / "D-drive" / "HomeMesh" / "secrets")
+    assert calls and calls[0][0] == "icacls" and "/inheritance:r" in calls[0]
+    assert "PLEX_SERVER\\ahearn:(OI)(CI)F" in calls[0] and "*S-1-5-18:(OI)(CI)F" in calls[0]
+
+
+def test_windows_acl_really_excludes_other_users(tmp_path):
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    import pytest
+
+    if sys.platform != "win32":
+        pytest.skip("Windows ACLs")
+    base = os.environ.get("RUNNER_TEMP")
+    if not base:
+        pytest.skip("needs a folder outside the user profile (GitHub Actions' RUNNER_TEMP)")
+    from homemesh.common.paths import ensure_private_dir
+
+    target = Path(base) / f"hm-acl-{os.getpid()}" / "secrets"
+    ensure_private_dir(target)
+    out = subprocess.run(["icacls", str(target)], capture_output=True, text=True, check=False).stdout
+    assert os.environ["USERNAME"].lower() in out.lower()
+    assert "BUILTIN\\Users" not in out and "Everyone" not in out and "(I)" not in out, out

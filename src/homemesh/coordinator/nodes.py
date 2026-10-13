@@ -127,9 +127,22 @@ class NodeManager:
 
     async def _sweep_loop(self) -> None:
         timeout = self.cfg.server.heartbeat_timeout_s
+        interval = max(1.0, timeout / 5)
+        last_tick = time.monotonic()
         while True:
-            await asyncio.sleep(max(1.0, timeout / 5))
+            await asyncio.sleep(interval)
             now = time.monotonic()
+            gap, last_tick = now - last_tick, now
+            if gap > 3 * interval + 5:
+                # This process was not running (the computer slept or hibernated; on Windows the
+                # monotonic clock keeps counting through sleep). Missing heartbeats say nothing about
+                # the workers then: give every connection a fresh timeout instead of dropping them all,
+                # including the built-in worker, and failing their jobs.
+                log.info("No heartbeat check for %.0fs (computer asleep?); giving connected computers %.0fs "
+                         "to check in", gap, timeout)
+                for conn in self.connections.values():
+                    conn.last_heartbeat = max(conn.last_heartbeat, now)
+                continue
             for conn in list(self.connections.values()):
                 if now - conn.last_heartbeat > timeout:
                     log.warning("Node %s missed heartbeats for %.0fs; marking offline", conn.name,

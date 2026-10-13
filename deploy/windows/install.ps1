@@ -65,14 +65,16 @@ function Invoke-HomeMesh([string[]]$Arguments, [switch]$Quiet) {
 }
 
 # Python check: version >= 3.11, venv module and SQLite FTS5 (used for search).
-$Check = "import sys, venv, sqlite3; sqlite3.connect(':memory:').execute('create virtual table t using fts5(x)'); print(sys.executable); sys.exit(0 if sys.version_info >= (3, 11) else 3)"
+# The path is printed as JSON with \u escapes (pure ASCII): PowerShell decodes a program's output with
+# the console code page, which would garble a profile folder name such as "José" otherwise.
+$Check = "import sys, json, venv, sqlite3; sqlite3.connect(':memory:').execute('create virtual table t using fts5(x)'); print(json.dumps({'exe': sys.executable})); sys.exit(0 if sys.version_info >= (3, 11) else 3)"
 
 function Resolve-Python([string]$Cmd, [string[]]$Pre) {
   $prev = $ErrorActionPreference
   $ErrorActionPreference = "Continue"
   try {
     $out = & $Cmd @Pre -c $Check 2>$null
-    if ($LASTEXITCODE -eq 0 -and $out) { return ([string]($out | Select-Object -Last 1)).Trim() }
+    if ($LASTEXITCODE -eq 0 -and $out) { return ([string]((($out | Select-Object -Last 1) | ConvertFrom-Json).exe)).Trim() }
   } catch {
   } finally {
     $ErrorActionPreference = $prev
@@ -104,10 +106,25 @@ if (-not $PyExe) {
 Say "Using Python at $PyExe"
 
 # ---- Web UI ----------------------------------------------------------------------------
-if (-not (Test-Path (Join-Path $Root "src\homemesh\web_dist\index.html"))) {
+# Build it when it is missing, or when its sources changed since the last build (after 'git pull'),
+# so an upgrade never pairs a new backend with an old web interface.
+$WebIndex = Join-Path $Root "src\homemesh\web_dist\index.html"
+$WebStale = -not (Test-Path $WebIndex)
+if (-not $WebStale) {
+  $built = (Get-Item $WebIndex).LastWriteTimeUtc
+  $sources = @("apps\web\src", "apps\web\public", "apps\web\index.html", "apps\web\package.json", "apps\web\package-lock.json", "apps\web\vite.config.ts") |
+    ForEach-Object { Join-Path $Root $_ } | Where-Object { Test-Path $_ }
+  $WebStale = [bool](Get-ChildItem -Path $sources -Recurse -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.LastWriteTimeUtc -gt $built } | Select-Object -First 1)
+}
+if ($WebStale) {
   if (-not $NoWeb -and (Get-Command npm -ErrorAction SilentlyContinue)) {
     Say "Building the web interface..."
     & (Join-Path $Root "scripts\build_web.ps1")
+    if (-not (Test-Path $WebIndex)) { Fail "Building the web interface failed - see the output above." }
+  } elseif (Test-Path $WebIndex) {
+    Write-Host "Note: the web interface sources changed but Node.js/npm is not available (or -NoWeb);"
+    Write-Host "      the previously built web UI is used. Install Node.js 20.19+ and run scripts\build_web.ps1."
   } else {
     Write-Host "Note: no prebuilt web UI found and Node.js/npm is not available (or -NoWeb)."
     Write-Host "      The API and CLI will work; install Node.js 20.19+ and run scripts\build_web.ps1 for the UI."

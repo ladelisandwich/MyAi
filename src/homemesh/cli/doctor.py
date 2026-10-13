@@ -180,9 +180,14 @@ async def _backends(cfg: HomeMeshConfig) -> list[Check]:
 def _port(cfg: HomeMeshConfig, running: bool) -> Check:
     if running:
         return Check("Port", OK, f"{cfg.server.host}:{cfg.server.port} in use by HomeMesh")
-    host = "127.0.0.1" if cfg.server.host in ("0.0.0.0", "::") else cfg.server.host
+    host = cfg.server.host.strip("[]") or "0.0.0.0"
     with socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if sys.platform == "win32":
+            # On Windows SO_REUSEADDR lets a bind succeed even while another program listens on the
+            # port, so the check would always say "free". Exclusive use makes it a real test.
+            s.setsockopt(socket.SOL_SOCKET, getattr(socket, "SO_EXCLUSIVEADDRUSE", -5), 1)
+        else:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # ignore old TIME_WAIT connections
         try:
             s.bind((host, cfg.server.port))
         except OSError as exc:
