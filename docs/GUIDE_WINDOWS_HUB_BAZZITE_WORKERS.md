@@ -319,15 +319,38 @@ Then ask a tool-capable model (e.g. `qwen3:8b`): "search the web for …" or "op
 
 ## Updating later
 
-* **Windows:** `cd $HOME\homemesh; git pull; powershell -ExecutionPolicy Bypass -File deploy\windows\install.ps1 -Upgrade`.
-  The upgrade rebuilds the web app when it changed, which needs Node.js. If you used the portable Node
-  ZIP (step 1.1), first put it on the PATH for that window:
-  `$env:Path = "$env:LOCALAPPDATA\Programs\node-v24.20.0-win-x64;$env:Path"`. Without Node the
-  previous web app keeps working, just without the newest screens.
-* **Bazzite:** `cd ~/homemesh && git pull && bash deploy/linux/install.sh --no-web --upgrade`
+Update the **hub first**, then each Bazzite computer. Each installer stops HomeMesh (with the version
+that is installed, so this also works from 0.1.0), installs the new version, and starts it again. The
+database is backed up automatically before any migration. Running chats are interrupted, so pick a
+quiet moment.
 
-Upgrade the hub first. Each upgrade stops and restarts HomeMesh, and the database is backed up
-automatically before any migration.
+**Windows hub** (PowerShell, a normal window):
+
+```powershell
+cd $HOME\homemesh
+git pull
+# Only if you use the portable Node.js ZIP from step 1.1 (the upgrade rebuilds the web app):
+$env:Path = "$env:LOCALAPPDATA\Programs\node-v24.20.0-win-x64;$env:Path"
+powershell -ExecutionPolicy Bypass -File deploy\windows\install.ps1 -Upgrade
+homemesh version
+```
+
+Without Node the previous web app keeps working, just without the newest screens. If the installer
+says HomeMesh "still answers" or that programs from the HomeMesh folder are still running, close other
+PowerShell windows that run `homemesh` (e.g. `homemesh logs -f`), or sign out and back in, then run the
+last command again.
+
+**Each Bazzite computer** (terminal):
+
+```bash
+cd ~/homemesh && git pull && bash deploy/linux/install.sh --no-web --upgrade
+homemesh service install    # refreshes the autostart unit; doesn't restart anything
+homemesh version && homemesh status
+```
+
+**Check:** `homemesh version` prints the new version (0.2.0 or later) on every computer, and on the hub
+the Computers page lists all of them online. If `homemesh status` on a Bazzite computer says it is not
+running, `homemesh start` shows why.
 
 ## Quick fixes
 

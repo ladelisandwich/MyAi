@@ -144,6 +144,24 @@ if ((Test-Path $Exe) -and -not $Upgrade) {
     if ($wasRunning) {
       Say "Stopping HomeMesh for the upgrade..."
       if (Invoke-HomeMesh @("stop")) { Fail "Could not stop HomeMesh; run 'homemesh stop --force' and try again." }
+      $code = Invoke-HomeMesh @("status") -Quiet
+      if ($code -eq 0 -or $code -eq 2) {
+        Fail ("HomeMesh still answers although 'homemesh stop' found nothing to stop (a process the installed " +
+              "version can't see). Sign out of Windows and back in (or restart), then run the upgrade again.")
+      }
+    }
+    # Windows keeps a program's files locked until the process has fully exited: wait for every process
+    # running from the HomeMesh folder (the stopped server, or e.g. 'homemesh logs -f' in another window).
+    $busy = @()
+    for ($i = 0; $i -lt 40; $i++) {
+      $busy = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($Venv, [StringComparison]::OrdinalIgnoreCase) })
+      if ($busy.Count -eq 0) { break }
+      Start-Sleep -Milliseconds 500
+    }
+    if ($busy.Count -gt 0) {
+      $list = ($busy | ForEach-Object { "$($_.Id) $($_.ProcessName)" }) -join ", "
+      Fail ("Programs from $Venv are still running ($list), so their files can't be replaced. Close other " +
+            "windows that run 'homemesh' (e.g. 'homemesh logs -f') and run the upgrade again.")
     }
   }
   Say "Installing into $Venv ..."
@@ -157,7 +175,10 @@ if ((Test-Path $Exe) -and -not $Upgrade) {
   }
   if ($wasRunning) {
     Say "Starting HomeMesh again (database migrations run automatically, with a backup first)..."
-    [void](Invoke-HomeMesh @("start"))
+    if (Invoke-HomeMesh @("start")) {
+      Write-Warning ("The upgrade is installed, but HomeMesh did not come back up (message above). " +
+                     "Check 'homemesh status' and 'homemesh logs'.")
+    }
   }
 }
 

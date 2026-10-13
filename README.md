@@ -22,7 +22,7 @@ telemetry, and no cloud unless you explicitly turn it on.
               └────────────┘      └─────────────┘
 ```
 
-## What works today (v0.1.0)
+## What works today (v0.2.0)
 
 | Area | Status |
 |---|---|

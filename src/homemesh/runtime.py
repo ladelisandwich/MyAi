@@ -22,7 +22,7 @@ import uvicorn
 
 from homemesh.common.config import HomeMeshConfig
 from homemesh.common.errors import ConfigError
-from homemesh.common.instance import InstanceLock, read_pid_record, write_pid_record
+from homemesh.common.instance import InstanceLock, legacy_pid, read_pid_record, write_pid_record
 from homemesh.common.logging import get_logger, setup_logging
 from homemesh.common.paths import AppPaths
 
@@ -73,6 +73,14 @@ async def run_roles(cfg: HomeMeshConfig, paths: AppPaths, roles: list[str] | Non
         other = read_pid_record(paths.pid_file)
         log.error("HomeMesh is already running for %s%s. Use 'homemesh status', or 'homemesh stop' first.",
                   paths.data_dir, f" (process {other})" if other else "")
+        return 2
+    older = legacy_pid(paths.pid_file)
+    if older:
+        # A version from before the instance lock doesn't hold it. Running next to it would mean two
+        # workers with one identity (or recovery against a live database), and its exit deletes our record.
+        lock.release()
+        log.error("An older HomeMesh version (process %d) is still running for %s. Stop it first: 'homemesh stop'.",
+                  older, paths.data_dir)
         return 2
     try:
         write_pid_record(paths.pid_file)

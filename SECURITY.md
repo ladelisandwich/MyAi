@@ -28,7 +28,7 @@ rather than a public issue.
 * A malicious model file or model server. HomeMesh treats model output as untrusted text, but the
   backends (Ollama, llama.cpp, vLLM) themselves are trusted software.
 * Exposing HomeMesh directly to the internet. Don't. Use a VPN (WireGuard, Tailscale) for remote access.
-* Multiple mutually distrusting users. v0.1.0 has a single owner account; the schema carries `user_id`
+* Multiple mutually distrusting users. v0.2.0 has a single owner account; the schema carries `user_id`
   everywhere for future multi-user support, but isolation between users is not implemented.
 
 ## Network exposure
@@ -159,7 +159,7 @@ Off by default; each computer allows them itself in `worker.allowed_tools`. Deta
 
 ## Cloud
 
-Cloud AI is **off**. `[cloud] enabled = false` is the master switch. v0.1.0 ships no cloud
+Cloud AI is **off**. `[cloud] enabled = false` is the master switch. v0.2.0 ships no cloud
 backend; the switch only gates Ollama's "remote" models (models Ollama proxies to a cloud service),
 which are hidden and unschedulable unless both `[cloud] enabled` and the backend's
 `allow_remote_models` are true. Such models are labelled `cloud` in the UI.

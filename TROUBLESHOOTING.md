@@ -174,7 +174,7 @@ read, because reading them would make Windows download the whole folder. Right-c
 are never followed out of it.
 
 **PDF shows `needs_ocr`**
-The PDF contains scanned images without a text layer. OCR isn't included in v0.1.0. Run it through an OCR
+The PDF contains scanned images without a text layer. OCR isn't included in v0.2.0. Run it through an OCR
 tool (e.g. `ocrmypdf`) and rescan.
 
 **Answers don't cite my documents**
@@ -256,6 +256,24 @@ ignored. You can always add memories on the Memory page.
 Approvals time out after `tools.approval_timeout_s` (5 minutes). Ask again.
 
 ## Database, backups, upgrades
+
+**"An older HomeMesh version (process N) is still running"**
+A HomeMesh from before 0.2.0 is still running for this data folder (it holds no instance lock, so
+the new version refuses to start next to it). Run `homemesh stop` (the new version finds and stops it),
+then `homemesh start`. The installers do this for you when run with `--upgrade` / `-Upgrade`.
+
+**Upgrade: "HomeMesh still answers although 'homemesh stop' found nothing to stop"**
+A HomeMesh process the installed version can't see (e.g. a duplicate started before 0.2.0 added the
+instance lock) is still serving. Sign out and back in (Windows) or log out / restart (Linux) so only
+the autostarted one runs, then run the upgrade again. Nothing was changed.
+
+**Upgrade (Windows): "Programs from …\HomeMesh\venv are still running"**
+Windows can't replace files of a running program. Close other windows that run `homemesh` (for
+example `homemesh logs -f`) and run the upgrade again. Nothing was changed.
+
+**`homemesh start` / `restart` exits with code 1**
+HomeMesh did not come up; the message says why (another instance, a configuration error, a busy
+port). Details: `homemesh logs` and, for errors before logging starts, `logs/console.log`.
 
 **"The database schema (vN) is newer than this HomeMesh version supports"**
 You started an older HomeMesh on a newer database. Install the newer version again, or restore a backup

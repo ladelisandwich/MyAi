@@ -11,15 +11,19 @@ trigger usually needs administrator rights, so it is not used.)
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import signal
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
-from homemesh.common.instance import lock_is_held, pid_record_ready, read_pid_record
+import psutil
+
+from homemesh.common.instance import legacy_pid, lock_is_held, pid_record_ready, read_pid_record
 from homemesh.common.paths import AppPaths
 from homemesh.common.proc import run_quiet
 
@@ -164,16 +168,23 @@ def read_pid(paths: AppPaths) -> int | None:
     another program; it is never reported (or stopped) as HomeMesh.
     """
     if not lock_is_held(paths.lock_file):
-        return None
+        # A version from before the lock (still running during an upgrade) holds none.
+        return legacy_pid(paths.pid_file)
     return read_pid_record(paths.pid_file)
 
 
-def start(paths: AppPaths) -> str:
+def start(paths: AppPaths) -> tuple[bool, str]:
+    """Start HomeMesh in the background and wait until it serves. Returns (running, message)."""
     if read_pid(paths):
-        return "HomeMesh is already running."
+        return True, "HomeMesh is already running."
     if sys.platform.startswith("linux") and unit_path().exists() and systemd_available():
         r = run_quiet(["systemctl", "--user", "start", UNIT_NAME], capture_output=True, text=True, check=False)
-        return "Started via systemd." if r.returncode == 0 else f"systemctl failed: {r.stderr.strip()}"
+        if r.returncode != 0:
+            return False, f"systemctl failed: {r.stderr.strip()}"
+        if _wait_ready(paths, lambda: not _unit_active()):
+            return True, "Started via systemd."
+        return False, ("systemd started HomeMesh, but it did not come up. See 'journalctl --user -u homemesh -n 50' "
+                       f"and {paths.logs_dir / 'homemesh.log'}.")
     # Portable fallback: a detached background process. It logs to homemesh.log; anything printed
     # before logging starts (e.g. a broken config file) goes to console.log (see cli.main).
     paths.logs_dir.mkdir(parents=True, exist_ok=True)
@@ -184,15 +195,35 @@ def start(paths: AppPaths) -> str:
     else:
         kwargs["start_new_session"] = True
     child = subprocess.Popen([_python_for_service(), "-m", "homemesh", "run"], **kwargs)
-    for _ in range(150):  # up to 30 s: the first start after an upgrade also migrates the database
+    if _wait_ready(paths, lambda: child.poll() is not None):
+        return True, f"Started in the background (logs: {paths.logs_dir / 'homemesh.log'})."
+    if child.poll() is not None:
+        why = ""
+        if child.returncode == 2 and (lock_is_held(paths.lock_file) or legacy_pid(paths.pid_file)):
+            why = " Another HomeMesh process is already running for this data folder; 'homemesh stop' it first."
+        return False, (f"HomeMesh exited right away (code {child.returncode}).{why} See {paths.logs_dir / 'console.log'} "
+                       f"and {paths.logs_dir / 'homemesh.log'}, or run 'homemesh run' to see the error.")
+    return False, (f"Started, but it is not answering yet - check 'homemesh status' in a minute, and "
+                   f"{paths.logs_dir / 'homemesh.log'} and {paths.logs_dir / 'console.log'}.")
+
+
+def _unit_active() -> bool:
+    r = run_quiet(["systemctl", "--user", "is-active", UNIT_NAME], capture_output=True, text=True, check=False)
+    return r.stdout.strip() in ("active", "activating", "reloading")
+
+
+def _wait_ready(paths: AppPaths, gave_up: Callable[[], bool], timeout_s: float = 60.0) -> bool:
+    """Wait for the running process's ready flag (the first start after an upgrade also migrates the
+    database, so this can take a while). Stops early when ``gave_up()`` says the process is gone."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
         time.sleep(0.2)
         if read_pid(paths) and pid_record_ready(paths.pid_file):
-            return f"Started in the background (logs: {paths.logs_dir / 'homemesh.log'})."
-        if child.poll() is not None:
-            return (f"HomeMesh exited right away (code {child.returncode}). See {paths.logs_dir / 'console.log'} "
-                    f"and {paths.logs_dir / 'homemesh.log'}, or run 'homemesh run' to see the error.")
-    return (f"Started; it is taking a while to come up - check {paths.logs_dir / 'homemesh.log'} "
-            f"and {paths.logs_dir / 'console.log'}.")
+            return True
+        if gave_up():
+            time.sleep(0.3)
+            return bool(read_pid(paths) and pid_record_ready(paths.pid_file))
+    return False
 
 
 def stop(paths: AppPaths, timeout: float = 30.0, *, force: bool = False) -> str:
@@ -204,6 +235,10 @@ def stop(paths: AppPaths, timeout: float = 30.0, *, force: bool = False) -> str:
     pid = read_pid(paths)
     if not pid:
         return "HomeMesh is not running."
+    try:
+        proc: psutil.Process | None = psutil.Process(pid)  # identity fixed now (PID plus start time)
+    except psutil.Error:
+        proc = None
     # Graceful on every OS: the process watches for this file and shuts down cleanly (running
     # jobs are cancelled and recorded). On POSIX we also send SIGTERM, which does the same.
     paths.stop_request_file.write_text(str(pid), encoding="utf-8")
@@ -212,6 +247,11 @@ def stop(paths: AppPaths, timeout: float = 30.0, *, force: bool = False) -> str:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if read_pid(paths) != pid:
+            # It released the lock; wait for the process itself to end too, so its files (the venv's
+            # python.exe and extension modules on Windows) are free when an installer replaces them.
+            if proc is not None:
+                with contextlib.suppress(psutil.Error):
+                    proc.wait(timeout=max(1.0, min(15.0, deadline - time.monotonic())))
             return "Stopped."
         time.sleep(0.3)
     if force:

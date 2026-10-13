@@ -116,8 +116,9 @@ def cmd_start(ctx: Ctx) -> int:
 
     if (code := _not_set_up(ctx, "start")) is not None:
         return code
-    print(service.start(ctx.paths))
-    return EXIT_OK
+    ok, message = service.start(ctx.paths)
+    print(message)
+    return EXIT_OK if ok else EXIT_ERROR
 
 
 def cmd_stop(ctx: Ctx) -> int:
@@ -136,8 +137,9 @@ def cmd_restart(ctx: Ctx) -> int:
     if service.read_pid(ctx.paths):
         return EXIT_ERROR
     time.sleep(1)
-    print(service.start(ctx.paths))
-    return EXIT_OK
+    ok, message = service.start(ctx.paths)
+    print(message)
+    return EXIT_OK if ok else EXIT_ERROR
 
 
 def cmd_status(ctx: Ctx) -> int:

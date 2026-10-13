@@ -7,7 +7,7 @@
    the gaming PC's GPU, document embedding on the home server, scanning on the laptop that holds the
    files.
 2. **Model splitting:** one model too large for any single computer runs *across* several, with layers
-   or tensors split over the network. **This is not implemented** in v0.1.0. This document explains why
+   or tensors split over the network. **This is not implemented** in v0.2.0. This document explains why
    and how it could be added.
 
 ## What's implemented (request-level)

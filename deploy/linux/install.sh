@@ -19,6 +19,7 @@ BIN_DIR="$HOME/.local/bin"
 PYTHON=""
 BUILD_WEB=1
 UPGRADE=0
+WAS_RUNNING=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -77,6 +78,22 @@ fi
 if [ -d "$VENV" ] && [ "$UPGRADE" = 0 ] && [ -x "$VENV/bin/homemesh" ]; then
   say "HomeMesh is already installed in $VENV - re-run with --upgrade to update it."
 else
+  if [ "$UPGRADE" = 1 ] && [ -x "$VENV/bin/homemesh" ]; then
+    # Ask the version that is installed NOW, before pip replaces it: it started the running process
+    # and knows how to find it (builds from before the instance lock are invisible to newer ones).
+    # Same order as install.ps1 -Upgrade. 'homemesh status' exits 0 when running, 2 when running but
+    # degraded (e.g. Ollama down), 3 when stopped.
+    rc=0; "$VENV/bin/homemesh" status >/dev/null 2>&1 || rc=$?
+    if [ "$rc" = 0 ] || [ "$rc" = 2 ]; then
+      WAS_RUNNING=1
+      say "Stopping HomeMesh for the upgrade…"
+      "$VENV/bin/homemesh" stop || fail "Could not stop HomeMesh; run 'homemesh stop --force' and re-run the upgrade."
+      rc=0; "$VENV/bin/homemesh" status >/dev/null 2>&1 || rc=$?
+      if [ "$rc" = 0 ] || [ "$rc" = 2 ]; then
+        fail "HomeMesh still answers although 'homemesh stop' found nothing to stop (a process the installed version can't see). Log out and back in (or restart the computer), then run the upgrade again."
+      fi
+    fi
+  fi
   say "Installing into $VENV…"
   mkdir -p "$DATA_BASE"
   "$PYTHON" -m venv "$VENV"
@@ -88,13 +105,10 @@ mkdir -p "$BIN_DIR"
 ln -sf "$VENV/bin/homemesh" "$BIN_DIR/homemesh"
 case ":$PATH:" in *":$BIN_DIR:"*) ;; *) echo "Add $BIN_DIR to your PATH (e.g. in ~/.bashrc): export PATH=\"$BIN_DIR:\$PATH\"";; esac
 
-if [ "$UPGRADE" = 1 ]; then
-  # 'homemesh status' exits 0 when running, 2 when running but degraded (e.g. Ollama down), 3 when stopped.
-  rc=0; "$BIN_DIR/homemesh" status >/dev/null 2>&1 || rc=$?
-  if [ "$rc" = 0 ] || [ "$rc" = 2 ]; then
-    say "Restarting HomeMesh to apply the upgrade (database migrations run automatically, with a backup first)…"
-    "$BIN_DIR/homemesh" restart || true
-  fi
+if [ "$WAS_RUNNING" = 1 ]; then
+  say "Starting HomeMesh again (database migrations run automatically, with a backup first)…"
+  "$BIN_DIR/homemesh" start || printf '\033[33mWarning:\033[0m %s\n' \
+    "the upgrade is installed, but HomeMesh did not come back up (message above). Check 'homemesh status' and 'homemesh logs'." >&2
 fi
 
 say "Installed: $("$VENV/bin/homemesh" version)"

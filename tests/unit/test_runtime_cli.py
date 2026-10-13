@@ -155,6 +155,93 @@ async def test_second_instance_exits_before_touching_the_database(tmp_path):
     assert not paths.db_file.exists()  # no crash recovery against the live instance's data
 
 
+# Stand-in for a HomeMesh from before the instance lock: its command line ends in "homemesh run", it
+# writes a bare PID, takes no lock, stops when the stop-request file appears and then deletes its PID file.
+_OLD_HOMEMESH = """
+import os, sys, time
+from pathlib import Path
+pid_file, stop_file = Path(sys.argv[1]), Path(sys.argv[2])
+pid_file.write_text(str(os.getpid()))
+for _ in range(600):
+    if stop_file.exists():
+        stop_file.unlink()
+        break
+    time.sleep(0.05)
+pid_file.unlink()
+"""
+
+
+def _start_old_homemesh(paths):
+    import subprocess
+    import sys
+    import time
+
+    proc = subprocess.Popen([sys.executable, "-c", _OLD_HOMEMESH, str(paths.pid_file), str(paths.stop_request_file),
+                             "homemesh", "run"])
+    for _ in range(100):
+        if paths.pid_file.exists() and paths.pid_file.read_text().strip():
+            break
+        time.sleep(0.05)
+    return proc
+
+
+def test_a_running_pre_lock_homemesh_is_found_and_stopped_after_an_upgrade(tmp_path, monkeypatch):
+    import os
+
+    from homemesh.cli import service
+    from homemesh.common.instance import legacy_pid
+    from homemesh.common.paths import default_paths
+
+    paths = default_paths(tmp_path)
+    paths.ensure()
+    monkeypatch.setattr(service, "unit_path", lambda: tmp_path / "no-unit")
+    proc = _start_old_homemesh(paths)
+    try:
+        assert legacy_pid(paths.pid_file) == proc.pid
+        assert service.read_pid(paths) == proc.pid  # no lock held, yet it is running
+        ok, message = service.start(paths)
+        assert ok and message == "HomeMesh is already running."  # no second instance next to it
+        assert service.stop(paths, timeout=10) == "Stopped."
+        proc.wait(timeout=10)
+        assert service.read_pid(paths) is None
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    # A bare PID that belongs to some other program (or to this process) is never taken for HomeMesh.
+    paths.pid_file.write_text(str(os.getpid()))
+    assert legacy_pid(paths.pid_file) is None
+
+
+async def test_new_version_refuses_to_run_next_to_a_pre_lock_homemesh(tmp_path):
+    from homemesh.common.config import HomeMeshConfig
+    from homemesh.common.instance import lock_is_held
+    from homemesh.common.paths import default_paths
+    from homemesh.runtime import run_roles
+
+    paths = default_paths(tmp_path)
+    paths.ensure()
+    proc = _start_old_homemesh(paths)
+    try:
+        code = await run_roles(HomeMeshConfig(), paths, install_signal_handlers=False)
+        assert code == 2
+        assert not paths.db_file.exists()  # no migration or crash recovery under the running version
+        assert paths.pid_file.read_text().strip() == str(proc.pid)  # its PID record is left alone
+        assert not lock_is_held(paths.lock_file)
+    finally:
+        proc.kill()
+        proc.wait(timeout=10)
+
+
+def test_start_reports_failure_when_homemesh_does_not_come_up(tmp_path, monkeypatch):
+    from homemesh.cli import main as cli_main
+    from homemesh.cli import service
+
+    monkeypatch.setenv("HOMEMESH_HOME", str(tmp_path))
+    monkeypatch.setattr(service, "start", lambda paths: (False, "HomeMesh exited right away (code 2)."))
+    (tmp_path / "homemesh.toml").write_text("")
+    assert cli_main.main(["start"]) == 1
+
+
 def test_a_reused_pid_is_never_taken_for_homemesh(tmp_path, monkeypatch):
     import json
     import os

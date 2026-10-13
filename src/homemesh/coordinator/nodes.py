@@ -295,6 +295,8 @@ class NodeManager:
                               models=hello.models, backends=[b.model_dump() for b in hello.backends])
         old = self.connections.get(node_id)
         if old is not None:
+            log.warning("Computer %s connected again; closing its older connection (two HomeMesh processes with "
+                        "the same identity, or a reconnect before the old link timed out)", node["name"])
             old.closed = True
             with contextlib.suppress(Exception):
                 await old.ws.close(code=pm.CLOSE_SUPERSEDED, reason="superseded by a new connection")

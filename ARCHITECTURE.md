@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes how HomeMesh v0.1.0 is built and why. Wire-level details are in
+This document describes how HomeMesh v0.2.0 is built and why. Wire-level details are in
 [docs/PROTOCOL.md](docs/PROTOCOL.md) and [docs/API.md](docs/API.md).
 
 ## Overview

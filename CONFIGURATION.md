@@ -194,7 +194,7 @@ them). Set-up and safety model: [docs/WEB_ACCESS.md](docs/WEB_ACCESS.md).
 
 | Key | Default | Meaning |
 |---|---|---|
-| `enabled` | `false` | Master switch for anything that would send prompts outside your network. Off by default; v0.1.0 ships no cloud backend. It only gates Ollama's remote models. |
+| `enabled` | `false` | Master switch for anything that would send prompts outside your network. Off by default; v0.2.0 ships no cloud backend. It only gates Ollama's remote models. |
 
 ## Environment variables
 

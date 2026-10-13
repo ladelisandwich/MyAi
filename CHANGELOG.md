@@ -3,6 +3,53 @@
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/);
 the worker protocol has its own version ([docs/PROTOCOL.md](docs/PROTOCOL.md)).
 
+## [0.2.0] - unreleased
+
+Upgrading from 0.1.0: run the installer with `--upgrade` / `-Upgrade` as described in the guide's
+"Updating later"; it stops the running 0.1.0 itself before replacing it.
+
+### Added
+
+* **Internet access (opt-in per computer):** `web_search` through the owner's own SearXNG,
+  `fetch_url` for public pages (private/local addresses refused on every redirect, DNS-rebinding safe,
+  HTTPS verified, size/time limits, page text extracted off the event loop in linear time; no approval only for links the user wrote and up to 3 search
+  results per answer, one per site; links found on pages always ask), and `open_url` to open a link in
+  a computer's browser (approval every time). Rootless,
+  loopback-only SearXNG Quadlet and installer for Bazzite (`deploy/bazzite/install-searxng.sh`),
+  `[web]` settings, `homemesh worker allow-tool/disallow-tool`, `homemesh web set-searxng/test`.
+  Approval cards now name the computer and say why they ask. Guide: docs/WEB_ACCESS.md.
+
+### Fixed
+
+* **Upgrading a running 0.1.0 (found by upgrading real 0.1.0 installs):** on Linux, `install.sh --upgrade`
+  left the old process running (the new `homemesh status` could not see a process from before the
+  instance lock), and a later `homemesh start` ran a second instance next to it that migrated the live
+  database. The installer now stops HomeMesh with the installed (old) version before replacing it, as the
+  Windows installer already did; the new version recognises a still-running 0.1.0 and refuses to start
+  next to it; both installers check that the stop worked and that HomeMesh came back up. `homemesh stop`
+  waits for the process to exit (Windows keeps its files locked until then), and `start`/`restart` exit
+  non-zero when HomeMesh did not come up. CI upgrades a running 0.1.0 install on Linux and Windows.
+* The version is now 0.2.0, so `homemesh version` and the Computers page show which build runs.
+* Windows desktop review (found by a code review of the Windows paths, each finding independently
+  verified; covered by tests where a test can show it):
+  * a second HomeMesh process (autostart racing `homemesh start`, or `homemesh run` next to the
+    background one) ran crash recovery against the live database; an OS lock now allows one per data
+    folder, taken before anything else;
+  * after a logoff the PID file could point at a recycled PID, so `start` refused and `stop --force`
+    could terminate an unrelated program; the PID record now includes the process start time;
+  * log rotation lost records and deleted old logs while `homemesh logs -f` (or an editor) held the
+    log open; `logs -f` no longer holds it, and rotation waits instead of failing;
+  * errors before logging started (e.g. a broken config) vanished in windowless autostart runs; they
+    now go to `logs/console.log`; background runs no longer copy the whole log into an unrotated file;
+  * document scans downloaded OneDrive cloud-only files and followed NTFS junctions out of the folder;
+  * waking from sleep dropped every connected computer (Windows' monotonic clock counts sleep time);
+  * the GPU query could fail on non-ASCII output and keep the worker from connecting;
+  * secrets folders outside the user profile (`HOMEMESH_HOME` on another drive) got no owner-only ACL;
+  * `homemesh doctor` reported a busy port as free on Windows;
+  * `install.ps1` garbled the Python path for non-ASCII profile names; upgrades kept the old web UI
+    (both installers now rebuild it when its sources changed); piped CLI output was garbled for
+    non-ASCII paths; `setup` didn't say that a running instance needs a restart.
+
 ## [0.1.0] - unreleased
 
 First working version.
@@ -51,36 +98,7 @@ First working version.
   guide for a Windows 11 hub with Bazzite workers; CI that runs the real installers on Windows (PowerShell
   5.1), inside the Bazzite image, and builds/runs the container image; Python 3.14 support.
 
-* **Internet access (opt-in per computer):** `web_search` through the owner's own SearXNG,
-  `fetch_url` for public pages (private/local addresses refused on every redirect, DNS-rebinding safe,
-  HTTPS verified, size/time limits, page text extracted off the event loop in linear time; no approval only for links the user wrote and up to 3 search
-  results per answer, one per site; links found on pages always ask), and `open_url` to open a link in
-  a computer's browser (approval every time). Rootless,
-  loopback-only SearXNG Quadlet and installer for Bazzite (`deploy/bazzite/install-searxng.sh`),
-  `[web]` settings, `homemesh worker allow-tool/disallow-tool`, `homemesh web set-searxng/test`.
-  Approval cards now name the computer and say why they ask. Guide: docs/WEB_ACCESS.md.
-
 ### Fixed during development (found by CI and real-process testing)
-
-* Windows desktop review (found by a code review of the Windows paths, each finding independently
-  verified; covered by tests where a test can show it):
-  * a second HomeMesh process (autostart racing `homemesh start`, or `homemesh run` next to the
-    background one) ran crash recovery against the live database; an OS lock now allows one per data
-    folder, taken before anything else;
-  * after a logoff the PID file could point at a recycled PID, so `start` refused and `stop --force`
-    could terminate an unrelated program; the PID record now includes the process start time;
-  * log rotation lost records and deleted old logs while `homemesh logs -f` (or an editor) held the
-    log open; `logs -f` no longer holds it, and rotation waits instead of failing;
-  * errors before logging started (e.g. a broken config) vanished in windowless autostart runs; they
-    now go to `logs/console.log`; background runs no longer copy the whole log into an unrotated file;
-  * document scans downloaded OneDrive cloud-only files and followed NTFS junctions out of the folder;
-  * waking from sleep dropped every connected computer (Windows' monotonic clock counts sleep time);
-  * the GPU query could fail on non-ASCII output and keep the worker from connecting;
-  * secrets folders outside the user profile (`HOMEMESH_HOME` on another drive) got no owner-only ACL;
-  * `homemesh doctor` reported a busy port as free on Windows;
-  * `install.ps1` garbled the Python path for non-ASCII profile names; upgrades kept the old web UI
-    (both installers now rebuild it when its sources changed); piped CLI output was garbled for
-    non-ASCII paths; `setup` didn't say that a running instance needs a restart.
 
 * Backup verification left the extracted database open, which broke verify/restore on Windows.
 * CLI output crashed on Windows when redirected (legacy code page); now falls back to ASCII symbols.

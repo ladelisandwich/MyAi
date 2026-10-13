@@ -17,6 +17,74 @@ concurrency:
   cancel-in-progress: false   # the Bazzite job is slow (large image); queue instead of cancelling it
 
 jobs:
+  upgrade-from-old:
+    # The owner's computers run builds from before the instance lock (2026-10-12/13). Upgrade such a
+    # RUNNING install with this tree's installer exactly as the guide says, on Linux and on Windows
+    # (where it was started like the logon autostart entry does).
+    name: Upgrade a running older install (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      OLD_REV: 3c901e4
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Linux - install the old build, start it, upgrade it with install.sh --upgrade
+        if: runner.os == 'Linux'
+        run: bash scripts/ci/upgrade_from_old.sh "$OLD_REV"
+      - name: Windows - install the old build, start it like the autostart entry, upgrade with install.ps1 -Upgrade
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $env:HOMEMESH_HOME = "$env:RUNNER_TEMP\hm-old"
+          $old = "$env:RUNNER_TEMP\old"
+          git worktree add $old $env:OLD_REV
+          if ($LASTEXITCODE) { throw "git worktree failed" }
+          powershell -NoProfile -ExecutionPolicy Bypass -File "$old\deploy\windows\install.ps1" -AutoStart -NoWeb
+          if ($LASTEXITCODE) { throw "old install.ps1 failed ($LASTEXITCODE)" }
+          $hm = "$env:LOCALAPPDATA\Programs\HomeMesh\bin\homemesh.cmd"
+          $venv = "$env:LOCALAPPDATA\Programs\HomeMesh\venv"
+          "correct-horse-battery" | & $hm setup --mode standalone --non-interactive --username owner --password-stdin --mock --no-service --port 18948
+          if ($LASTEXITCODE) { throw "setup failed" }
+          # Start it the way Windows does at logon: the command in the HKCU Run entry (pythonw, no console).
+          $run = (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run").HomeMesh
+          if ($run -notmatch '^"([^"]+)"\s+(.*)$') { throw "unexpected autostart entry: $run" }
+          Start-Process -FilePath $Matches[1] -ArgumentList $Matches[2]
+          $up = $false
+          for ($i = 0; $i -lt 60; $i++) {
+            Start-Sleep -Seconds 1
+            & $hm status *> $null
+            if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq 2) { $up = $true; break }
+          }
+          if (-not $up) { throw "the old build did not start" }
+          $oldPid = [int](Get-Content "$env:HOMEMESH_HOME\data\homemesh.pid").Trim()
+          & "$venv\Scripts\python.exe" scripts\bench.py --runs 1 --model mock-chat
+          if ($LASTEXITCODE) { throw "chat on the old build failed" }
+
+          powershell -NoProfile -ExecutionPolicy Bypass -File deploy\windows\install.ps1 -Upgrade -NoWeb
+          if ($LASTEXITCODE) { throw "install.ps1 -Upgrade failed ($LASTEXITCODE)" }
+          if (Get-Process -Id $oldPid -ErrorAction SilentlyContinue) { throw "the old process $oldPid is still running" }
+          & $hm status; if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 2) { throw "not running after the upgrade ($LASTEXITCODE)" }
+          $want = (Select-String -Path src\homemesh\version.py -Pattern '__version__ = "(.*)"').Matches[0].Groups[1].Value
+          $ver = & $hm version
+          if ($ver -notlike "*$want*") { throw "expected version $want, got: $ver" }
+          $rec = Get-Content "$env:HOMEMESH_HOME\data\homemesh.pid" -Raw | ConvertFrom-Json
+          if (-not $rec.ready) { throw "no new PID record" }
+          if (-not (Get-ChildItem "$env:HOMEMESH_HOME\data\backups\pre-migration-*")) { throw "no pre-migration backup" }
+          & "$venv\Scripts\python.exe" scripts\bench.py --runs 1 --model mock-chat
+          if ($LASTEXITCODE) { throw "chat after the upgrade failed" }
+          & $hm stop; if ($LASTEXITCODE) { throw "stop failed" }
+          & $hm status; if ($LASTEXITCODE -ne 3) { throw "still running after stop ($LASTEXITCODE)" }
+          exit 0
+
   windows-installer:
     name: Windows installer (PowerShell 5.1, Python ${{ matrix.python }})
     runs-on: windows-latest

@@ -133,3 +133,29 @@ def read_pid_record(path: Path) -> int | None:
     except (psutil.Error, OSError):
         return None
     return pid if "homemesh" in cmdline else None
+
+
+def legacy_pid(path: Path) -> int | None:
+    """A HomeMesh started by a version from before the instance lock (up to 2026-10-13), still running.
+
+    Such a process never takes the lock and writes a bare PID, so after an upgrade the lock alone can't
+    see it. Only a live process other than this one, whose command line is ``... homemesh ... run ...``,
+    counts; a bare PID that now belongs to another program does not.
+    """
+    try:
+        raw = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not raw.isdigit():
+        return None  # missing, or a JSON record from a lock-aware version
+    pid = int(raw)
+    if pid <= 0 or pid == os.getpid() or _create_time(pid) is None:
+        return None
+    try:
+        args = [a.lower() for a in psutil.Process(pid).cmdline()]
+    except (psutil.Error, OSError):
+        return None
+    for i, arg in enumerate(args):
+        if "homemesh" in arg:
+            return pid if "run" in args[i + 1:] else None
+    return None

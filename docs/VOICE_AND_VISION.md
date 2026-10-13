@@ -23,7 +23,7 @@ Not yet: image generation, OCR of scanned PDFs (they're marked `needs_ocr`), vid
 
 The model roles **Speech-to-text** and **Text-to-speech** exist in settings and the Models page
 (shown as "not available yet") so the data model is ready. No STT or TTS engine is integrated in
-v0.1.0.
+v0.2.0.
 
 ### Planned design
 
