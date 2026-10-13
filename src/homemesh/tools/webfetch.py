@@ -98,6 +98,10 @@ def local_networks() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
                     prefix = ip.max_prefixlen
             elif ip.version == 6:
                 prefix = 64  # Windows may not report IPv6 netmasks; home LANs are /64
+            if ip.version == 6 and ip.is_global:
+                # A home gets a whole IPv6 prefix (usually /56 or /48) for all its networks (guest Wi-Fi,
+                # IoT, a second router); DHCPv6 may even report a /128. Block the /48 around each address.
+                prefix = min(prefix, 48)
             nets.append(ipaddress.ip_network(f"{ip}/{prefix}", strict=False))
     return nets
 
@@ -133,7 +137,10 @@ async def fetch_public(url: str, *, timeout_s: float = 20.0, max_bytes: int = 5 
                        accept: str = "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5",
                        max_redirects: int = 5, resolver: Resolver | None = None,
                        address_allowed: Callable[[str], bool] | None = None,
-                       verify: ssl.SSLContext | bool = True) -> FetchResult:
+                       verify: ssl.SSLContext | bool = True, total_timeout_s: float | None = None) -> FetchResult:
+    """Fetch one public page, following redirects. ``timeout_s`` bounds each hop (lookup, connect,
+    headers and body); ``total_timeout_s`` bounds all hops together, so a chain of slow redirects
+    can't outlast the tool's own time limit."""
     resolve = resolver or system_resolver
     address_allowed = address_allowed or default_address_policy()
     try:
@@ -142,16 +149,28 @@ async def fetch_public(url: str, *, timeout_s: float = 20.0, max_bytes: int = 5 
         raise FetchError(str(exc)) from exc
     first = current
     redirects: list[str] = []
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + total_timeout_s if total_timeout_s is not None else None
+    overall = FetchError(f"the page and its redirects took longer than {total_timeout_s or 0:.0f} seconds")
+
+    def too_slow(what: str) -> FetchError:
+        return overall if hop_s < timeout_s else FetchError(f"{what} within {timeout_s:.0f} seconds")
+
     for _hop in range(max_redirects + 1):
+        hop_s = timeout_s
+        if deadline is not None:
+            hop_s = min(timeout_s, deadline - loop.time())
+            if hop_s <= 0:
+                raise overall
         parts = urlsplit(current)
         host = parts.hostname or ""
         port = parts.port or (443 if parts.scheme == "https" else 80)
         if port < 1024 and port not in (80, 443):
             raise BlockedAddress(f"port {port} is not a web port; HomeMesh only fetches web pages")
         try:
-            addresses = await asyncio.wait_for(resolve(host, port), timeout_s)
+            addresses = await asyncio.wait_for(resolve(host, port), hop_s)
         except TimeoutError as exc:
-            raise FetchError(f"looking up {host} took longer than {timeout_s:.0f} seconds") from exc
+            raise too_slow(f"could not look up {host}") from exc
         if not addresses:
             raise FetchError(f"could not find the address of {host}")
         blocked = [a for a in addresses if not address_allowed(a)]
@@ -168,9 +187,9 @@ async def fetch_public(url: str, *, timeout_s: float = 20.0, max_bytes: int = 5 
             try:
                 # One deadline for the whole hop (connect, headers and body): httpx's own timeouts apply
                 # per read, so a server dripping a byte at a time could otherwise hold the fetch open.
-                async with asyncio.timeout(timeout_s), httpx.AsyncClient(
+                async with asyncio.timeout(hop_s), httpx.AsyncClient(
                         trust_env=False, follow_redirects=False, verify=verify,
-                        timeout=httpx.Timeout(timeout_s)) as client:
+                        timeout=httpx.Timeout(hop_s)) as client:
                     request = client.build_request("GET", target, headers=headers, extensions=extensions)
                     response = await client.send(request, stream=True)
                     try:
@@ -194,7 +213,7 @@ async def fetch_public(url: str, *, timeout_s: float = 20.0, max_bytes: int = 5 
                 last_error = exc
                 continue
             except (httpx.TimeoutException, TimeoutError) as exc:
-                raise FetchError(f"{host} did not send the page within {timeout_s:.0f} seconds") from exc
+                raise too_slow(f"{host} did not send the page") from exc
             except httpx.InvalidURL as exc:  # e.g. a malformed Location header, parsed by httpx itself
                 raise FetchError(f"{host} sent a malformed redirect ({exc})") from exc
             except httpx.HTTPError as exc:
@@ -263,8 +282,26 @@ def _describe(exc: BaseException | None) -> str:
         return "no address worked"
     text = str(exc) or type(exc).__name__
     if "CERTIFICATE_VERIFY_FAILED" in text or isinstance(exc.__cause__, ssl.SSLCertVerificationError):
-        return "its HTTPS certificate is not valid for this name (HomeMesh never skips certificate checks)"
+        if "mismatch" in text.lower() or "not valid for" in text.lower():
+            return "its HTTPS certificate is not valid for this name (HomeMesh never skips certificate checks)"
+        return ("its HTTPS certificate was issued by an authority HomeMesh does not trust. If antivirus or a proxy "
+                "on this computer inspects HTTPS, see TROUBLESHOOTING.md (HomeMesh never skips certificate checks)")
     return text[:300]
+
+
+def tls_context(extra_ca_file: str = "") -> ssl.SSLContext | bool:
+    """Mozilla's CA list (certifi, as httpx uses), plus an extra CA the owner chose to trust, e.g. the
+    root certificate of antivirus software that inspects HTTPS. Verification is never turned off."""
+    if not extra_ca_file:
+        return True
+    import certifi
+
+    ctx = ssl.create_default_context(cafile=certifi.where())
+    try:
+        ctx.load_verify_locations(cafile=extra_ca_file)
+    except (OSError, ssl.SSLError) as exc:
+        raise FetchError(f"web.extra_ca_file {extra_ca_file!r} could not be loaded ({exc})") from exc
+    return ctx
 
 
 def _charset(content_type: str) -> str | None:
@@ -281,16 +318,17 @@ def decode_body(body: bytes, charset: str | None, html: bool) -> str:
         m = re.search(rb"<meta[^>]+charset\s*=\s*[\"']?([\w.:-]+)", body[:4096], re.I)
         if m:
             candidates.append(m.group(1).decode("ascii", "ignore"))
+    # A byte order mark wins over any label, as in browsers.
     if body.startswith(codecs.BOM_UTF8):
         candidates.insert(0, "utf-8-sig")
+    elif body.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        candidates.insert(0, "utf-16")
     candidates.append("utf-8")
     for enc in candidates:
         try:
-            codecs.lookup(enc)
-        except LookupError:
-            continue
-        try:
+            # LookupError: unknown names, and codecs that are not text encodings ("base64", "zlib"),
+            # which a page may name; UnicodeError: bytes that don't fit (also from "idna"-like codecs).
             return body.decode(enc)
-        except UnicodeDecodeError:
+        except (LookupError, UnicodeError):
             continue
     return body.decode("utf-8", errors="replace")

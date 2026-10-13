@@ -125,6 +125,103 @@ def test_html_to_text_survives_broken_markup():
     assert "unclosed bold text" in page.text and "after" in page.text
 
 
+def test_html_to_text_closes_optional_end_tags_like_a_browser():
+    html = ("<ul><li>one<li>two<ul><li>inner</ul>still two<li>three</ul>"
+            "<table><tr><td>a<td>b<tr><td>c</table><p>first<p>second<div>block</div>")
+    text = html_to_text(html, "https://x.example/").text
+    assert "- one\n" in text and "- two" in text and "- inner" in text and "- three" in text
+    assert text.index("still two") < text.index("- three")
+    for cell in ("a", "b", "c", "first", "second", "block"):
+        assert f"\n{cell}" in "\n" + text
+    # An end tag far above the text doesn't make "</p>" or "<li>" close the wrong elements.
+    assert "x" in html_to_text("</p></li><li>x", "https://x.example/").text
+
+
+@pytest.mark.parametrize("html", [
+    "<p>x" * 75_000,                                   # unclosed paragraphs
+    "<ul>" + "<li>x" * 60_000,                         # unclosed list items
+    "<table>" + "<tr><td>x" * 33_000,                  # unclosed cells and rows
+    "<div>" * 60_000,                                  # absurd nesting
+    "<span>" * 600 + "<li>x" * 75_000,                 # implied ends below a deep stack
+    "<ul>" * 600 + "<b>x" * 75_000,                    # text inside many open lists
+    '<ul><li><a href="/a">a</a><li><a href="/b">b</a><li><a href="/c">c</a></ul>' * 4_000,
+], ids=["p", "li", "td", "div", "deep-li", "deep-lists", "link-lists"])
+def test_html_to_text_stays_fast_on_hostile_markup(html):
+    import time
+
+    t0 = time.perf_counter()
+    html_to_text(html, "https://x.example/")
+    assert time.perf_counter() - t0 < 5  # ~0.5 s here; quadratic behaviour would take minutes
+
+
+def test_html_to_text_reads_only_the_first_part_of_huge_pages():
+    from homemesh.tools.htmltext import MAX_HTML_CHARS
+
+    page = html_to_text("<p>" + "word " * (MAX_HTML_CHARS // 5) + "<p>THE-END", "https://x.example/")
+    assert page.truncated and "THE-END" not in page.text
+    assert not html_to_text("<p>short", "https://x.example/").truncated
+
+
+def test_html_to_text_handles_real_world_page_shapes():
+    body = "Real article text. " * 20
+    # ASP.NET pages wrap the whole body in a <form>; it must not hide the content.
+    page = html_to_text(f"<html><body><form id='aspnetForm'><main><p>{body}</p></main></form></body></html>",
+                        "https://x.example/")
+    assert "Real article text." in page.text
+    # A missing </head> (and even a missing <body>) must not swallow the page.
+    page = html_to_text(f"<html><head><title>T</title><meta charset=utf-8><p>{body}", "https://x.example/")
+    assert page.title == "T" and "Real article text." in page.text
+    # Comments marked up as <article> must not replace the real post.
+    page = html_to_text(f"<body><div class=post><p>{body}</p></div><section>"
+                        + "<article>Nice post!</article>" * 3 + "</section></body>", "https://x.example/")
+    assert "Real article text." in page.text and "Nice post!" in page.text
+    # ...while a page that is mostly one article is focused on it.
+    page = html_to_text(f"<body><div>Sidebar teaser</div><article><p>{body}</p></article></body>",
+                        "https://x.example/")
+    assert "Real article text." in page.text and "Sidebar teaser" not in page.text
+    # Inline SVG icons have <title> elements too; they are not the page title.
+    page = html_to_text("<html><head></head><body><svg><title>Search icon</title></svg><p>Hi</p></body>",
+                        "https://x.example/")
+    assert page.title == "" and "Search icon" not in page.text
+    page = html_to_text("<head><title>Real</title></head><body><svg><title>Icon</title></svg></body>",
+                        "https://x.example/")
+    assert page.title == "Real"
+
+
+@pytest.mark.parametrize(("body", "charset", "html", "expected"), [
+    ("héllo".encode(), "base64", False, "héllo"),          # not a text encoding
+    ("héllo".encode(), "zlib", False, "héllo"),
+    ("héllo".encode(), "no-such-charset", False, "héllo"),
+    ("héllo".encode("utf-16"), None, False, "héllo"),      # UTF-16 with a byte order mark
+    ("héllo".encode("utf-16"), "iso-8859-1", False, "héllo"),  # the BOM wins over the label
+    (b'<meta charset="rot13"><p>h\xc3\xa9llo', None, True, '<meta charset="rot13"><p>héllo'),
+    ("héllo".encode("cp1252"), "windows-1252", False, "héllo"),
+])
+def test_decode_body_never_fails_on_odd_charsets(body, charset, html, expected):
+    assert webfetch.decode_body(body, charset, html=html) == expected
+
+
+async def test_redirect_chains_share_one_overall_deadline():
+    async def slow_dns(host, port):
+        await asyncio.sleep(0.3)
+        return ["127.0.0.1"]
+
+    routes = {f"/{i}": (302, {"Location": f"/{i + 1}"}, b"") for i in range(10)}
+    async with Server(routes) as s:
+        kw = {"user_agent": UA, "resolver": slow_dns, "address_allowed": loopback_is_public, "max_redirects": 10}
+        t0 = asyncio.get_running_loop().time()
+        with pytest.raises(FetchError, match="page and its redirects took longer than 1 seconds"):
+            await fetch_public(f"http://site.test:{s.port}/0", timeout_s=5, total_timeout_s=1, **kw)
+        assert asyncio.get_running_loop().time() - t0 < 2
+        # Without an overall limit each hop has its own time, and too many redirects is the error.
+        with pytest.raises(FetchError, match="too many redirects"):
+            await fetch_public(f"http://site.test:{s.port}/0", timeout_s=5, **{**kw, "max_redirects": 2})
+
+
+def test_fetch_url_download_deadline_fits_inside_the_tool_timeout():
+    assert web.FETCH_DOWNLOAD_DEADLINE_S + 10 <= web.FETCH_URL.timeout_s
+
+
 # --------------------------------------------------------------------------- SSRF-safe fetching
 
 
@@ -266,9 +363,20 @@ async def test_https_verifies_the_certificate_against_the_host_name_not_the_ip(t
                                  address_allowed=loopback_is_public, verify=client_ctx)
         assert res.body == b"secure"
         # Same server, same IP, but a name the certificate does not cover: refused.
-        with pytest.raises(FetchError, match="certificate"):
+        with pytest.raises(FetchError, match="not valid for this name"):
             await fetch_public(f"https://other.test:{s.port}/", user_agent=UA, resolver=dns,
                                address_allowed=loopback_is_public, verify=client_ctx)
+        # An issuer that isn't in Mozilla's list (like antivirus HTTPS inspection): explained as such...
+        with pytest.raises(FetchError, match="authority HomeMesh does not trust"):
+            await fetch_public(f"https://site.test:{s.port}/", user_agent=UA, resolver=dns,
+                               address_allowed=loopback_is_public)
+        # ...and trusted once the owner adds that CA (web.extra_ca_file), with verification still on.
+        res = await fetch_public(f"https://site.test:{s.port}/", user_agent=UA, resolver=dns,
+                                 address_allowed=loopback_is_public, verify=webfetch.tls_context(str(tmp_path / "ca.pem")))
+        assert res.body == b"secure"
+        with pytest.raises(FetchError, match="not valid for this name"):
+            await fetch_public(f"https://other.test:{s.port}/", user_agent=UA, resolver=dns,
+                               address_allowed=loopback_is_public, verify=webfetch.tls_context(str(tmp_path / "ca.pem")))
 
 
 # --------------------------------------------------------------------------- fetch_url tool
@@ -461,6 +569,7 @@ def test_fetch_policy_refuses_this_computers_own_networks_even_with_global_ipv6(
     monkeypatch.setattr(webfetch.psutil, "net_if_addrs", lambda: interfaces)
     allowed = webfetch.default_address_policy()
     assert not allowed("2a02:8109:b6c0:1d00:3e7c:3fff:fe12:3456")  # a NAS on the same IPv6 /64
+    assert not allowed("2a02:8109:b6c0:1d01::10")  # guest/IoT network: another /64 of the home's prefix
     assert not allowed("2a02:8109:b6c0:1d00::10")  # this computer
     assert not allowed("93.184.215.14")  # this computer's public address
     assert allowed("2606:4700::1111") and allowed("8.8.8.8")
@@ -538,3 +647,16 @@ async def test_cli_web_test_runs_a_real_search_against_the_configured_searxng(tm
     out = capsys.readouterr().out
     assert code == 0 and "2 result(s)" in out and "https://recipes.example/pancakes" in out
     assert "engine did not answer: google: CAPTCHA" in out and "allow-tool web_search" in out
+
+
+def test_long_pages_are_shortened_for_the_model_without_losing_links():
+    from homemesh.coordinator.tool_service import MAX_RESULT_CHARS, tool_result_text
+
+    links = [{"text": f"Link {i}", "url": f"https://site.example/{i}"} for i in range(20)]
+    result = {"ok": True, "output": {"url": "https://site.example/", "final_url": "https://site.example/",
+                                     "title": "Big", "truncated": False, "links": links, "content": "word " * 5000}}
+    text = tool_result_text(result)
+    data = json.loads(text)
+    assert len(text) <= MAX_RESULT_CHARS
+    assert data["output"]["links"] == links and data["output"]["truncated"] is True
+    assert data["output"]["content"].startswith("word word") and data["output"]["content"].endswith(" …")

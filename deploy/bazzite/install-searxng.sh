@@ -67,7 +67,9 @@ if [ "$REMOVE" -eq 1 ]; then
 fi
 
 [ -f "$TEMPLATE" ] || fail "Missing $TEMPLATE (run this script from the HomeMesh source folder)."
-IMAGE="$(sed -n 's/^Image=//p' "$TEMPLATE")"
+# HOMEMESH_SEARXNG_IMAGE picks another SearXNG build without editing the file from the repository
+# (which would block 'git pull'); it applies to this run, so set it again on later runs.
+IMAGE="${HOMEMESH_SEARXNG_IMAGE:-$(sed -n 's/^Image=//p' "$TEMPLATE")}"
 [ -n "$IMAGE" ] || fail "No Image= line in $TEMPLATE"
 
 port_busy() {  # does anything (HTTP or not) listen on 127.0.0.1:$1?
@@ -141,6 +143,7 @@ fi
 # ---- Quadlet unit ----------------------------------------------------------------------------
 mkdir -p "$QUADLET_DIR"
 NEW_UNIT="$(sed -e "s#^PublishPort=127.0.0.1:8888:8080#PublishPort=127.0.0.1:$PORT:8080#" \
+                -e "s#^Image=.*#Image=$IMAGE#" \
                 -e "s#^Volume=%h/.config/homemesh-searxng:#Volume=$CONF_DIR:#" "$TEMPLATE")"
 if [ -f "$QUADLET_DIR/$UNIT.container" ] && [ "$(cat "$QUADLET_DIR/$UNIT.container")" != "$NEW_UNIT" ]; then
   cp "$QUADLET_DIR/$UNIT.container" "$QUADLET_DIR/$UNIT.container.bak-$(date +%Y%m%d-%H%M%S)"

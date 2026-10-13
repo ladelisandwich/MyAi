@@ -185,8 +185,9 @@ them). Set-up and safety model: [docs/WEB_ACCESS.md](docs/WEB_ACCESS.md).
 | `safesearch` | `1` | `0` off, `1` moderate, `2` strict. |
 | `search_language` | `auto` | Search language (`en`, `de`, `all`, …). |
 | `max_results` | `8` | Results per search (1-20). |
-| `timeout_s` | `20` | Per search request, and per page or redirect for `fetch_url`. |
+| `timeout_s` | `20` | Per search request, and per page or redirect for `fetch_url` (one deadline each, 1-30). A whole search stops after 40 s, a whole `fetch_url` call after 60 s. |
 | `max_download_mb` | `5` | Pages are cut off beyond this (marked `truncated`). |
+| `extra_ca_file` | `""` | Extra CA certificate (PEM) to trust for `fetch_url`, e.g. antivirus HTTPS inspection. Mozilla's list (certifi) stays in use; the Windows certificate store and `SSL_CERT_FILE` are not used. |
 | `max_redirects` | `5` | Each redirect is re-checked against the private-address rules. |
 
 ## `[cloud]`

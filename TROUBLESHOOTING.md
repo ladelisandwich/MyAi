@@ -215,17 +215,27 @@ Deliberate: `fetch_url` never reads pages on your home network or this computer.
 yourself (or with `open_url`, which asks first).
 
 **"its HTTPS certificate is not valid for this name"**
-The site's certificate doesn't match, or something on your network intercepts HTTPS (some antivirus
-and corporate proxies). HomeMesh never skips certificate checks.
+The site's certificate doesn't match the name. HomeMesh never skips certificate checks.
+
+**"its HTTPS certificate was issued by an authority HomeMesh does not trust"**
+Usually antivirus or a proxy on that computer inspects HTTPS and re-signs pages with its own root
+certificate (Avast, AVG, ESET, Kaspersky, Bitdefender can do this on Windows). HomeMesh trusts only
+Mozilla's list (it ignores the Windows certificate store and `SSL_CERT_FILE`). Options: turn off HTTPS
+scanning for `python.exe`/`pythonw.exe` in the antivirus; or export the antivirus's root certificate as a
+PEM file and set `web.extra_ca_file` to it; or allow `fetch_url` only on a computer without inspection
+(e.g. the Bazzite desktop).
 
 **An approval card appears for `fetch_url`**
-The model wants an address that you didn't give and no search result contained. Approve if the link
-looks right, deny otherwise (see "No silent data leaks" in WEB_ACCESS.md).
+`fetch_url` runs without asking only for links you wrote in the conversation, and for up to 3 search
+results per answer (one per site). It asks for links found on a page, for a 4th page or a second page
+from the same site in one answer, and for any address that came from elsewhere or was changed. The card
+says which. Approve if the link looks right, deny otherwise (see "No silent data leaks" in WEB_ACCESS.md).
 
 **`open_url`: "no graphical desktop session is running for this user"** (Linux)
 Nobody is logged in to the desktop on that computer (or only over SSH). When HomeMesh was autostarted
 by systemd it opens the link through the user manager (`systemd-run --user xdg-open …`), which needs
-the desktop session to have registered itself (KDE and GNOME do). On Windows it opens the browser of
+the desktop session to have registered its environment with systemd (current KDE and GNOME are
+expected to; not yet confirmed on Bazzite). On Windows it opens the browser of
 the signed-in user; HomeMesh must run as that user (the normal autostart does).
 
 **`homemesh web set-searxng` / `worker allow-tool` / `restart`: "not set up on this computer yet"**

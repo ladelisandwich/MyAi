@@ -182,8 +182,9 @@ dispatch overhead), sources and memory ids used, and whether it came from the mo
 
 **Tool loop.** Tools are offered only to models with the `tools` capability (up to `max_rounds`).
 Internet tools (`web_search`, `fetch_url`, `open_url`) are ordinary node tools: SSRF-safe fetching lives
-in `tools/webfetch.py` and `tools/urlsafety.py`; the coordinator asks for approval when `fetch_url`
-targets an address not seen in the conversation (docs/WEB_ACCESS.md).
+in `tools/webfetch.py` and `tools/urlsafety.py`; the coordinator lets `fetch_url` run without approval
+only for links the user wrote and a few search results per answer (`ToolService._unasked_fetch_refusal`,
+docs/WEB_ACCESS.md).
 Each round is its own job. Tool calls are validated, checked against policy, and either executed
 (on the coordinator, or as a `tool.exec` job on the node that owns the data) or held for **approval**,
 which is shown in the UI of every connected device. Results go back to the model as `role: tool` data.

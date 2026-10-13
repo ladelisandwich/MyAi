@@ -15,10 +15,11 @@ import ssl
 import sys
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
-from homemesh.common.config import HomeMeshConfig, load_config
+from homemesh.common.config import HomeMeshConfig, is_loopback_host, load_config
 from homemesh.common.errors import ConfigError
 from homemesh.common.paths import AppPaths
 from homemesh.version import SUPPORTED_PROTOCOL_VERSIONS
@@ -307,7 +308,13 @@ def _internet_tools(cfg: HomeMeshConfig) -> list[Check]:
         checks.append(Check("SearXNG", FAIL, f"{url} answers, but JSON output is off",
                             "Add json to search.formats in its settings.yml and restart it."))
     elif health.status_code == 200 and probe.status_code == 400:
-        checks.append(Check("SearXNG", OK, f"{url} (JSON on)", "Try a real search: homemesh web test"))
+        host = urlsplit(url).hostname or ""
+        if is_loopback_host(host):
+            checks.append(Check("SearXNG", OK, f"{url} (JSON on)", "Try a real search: homemesh web test"))
+        else:
+            checks.append(Check("SearXNG", WARN, f"{url} (JSON on) is on another computer",
+                                "Search queries leave this computer" + (" unencrypted" if url.startswith("http://")
+                                                                        else "") + "; prefer SearXNG on 127.0.0.1."))
     else:
         checks.append(Check("SearXNG", WARN, f"{url} answered HTTP {health.status_code}/{probe.status_code}",
                             "Is this really SearXNG? homemesh web test shows details."))

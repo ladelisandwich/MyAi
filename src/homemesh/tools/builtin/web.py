@@ -34,12 +34,22 @@ from homemesh.tools.base import ToolContext, ToolDefinition
 from homemesh.tools.desktop import open_in_browser
 from homemesh.tools.htmltext import html_to_text
 from homemesh.tools.urlsafety import UnsafeURL, host_label, is_public_address, normalize_url
-from homemesh.tools.webfetch import FetchError, decode_body, fetch_public, system_resolver
+from homemesh.tools.webfetch import (
+    FetchError,
+    FetchResult,
+    decode_body,
+    fetch_public,
+    system_resolver,
+    tls_context,
+)
 
 # Tools whose results contain links the model may follow without asking (see ToolService._url_known).
 WEB_RESULT_TOOLS = ("web_search", "fetch_url")
 USER_AGENT = f"HomeMesh/{__version__} (self-hosted personal assistant; fetches pages at its owner's request)"
-MAX_LINKS_RETURNED = 40
+MAX_LINKS_RETURNED = 20
+FETCH_TOOL_TIMEOUT_S = 60
+# The download (all redirects included) must finish by then, leaving time to read the page.
+FETCH_DOWNLOAD_DEADLINE_S = 45
 _TEXT_TYPES = {"application/json", "application/ld+json", "application/xml", "application/rss+xml",
                "application/atom+xml", "application/javascript", "application/x-yaml", "application/yaml"}
 
@@ -175,7 +185,7 @@ async def _web_search(ctx: ToolContext, args: SearchInput) -> dict[str, Any]:
 # --------------------------------------------------------------------------- fetch_url
 class FetchInput(BaseModel):
     url: str = Field(description="The http:// or https:// address of a public web page", max_length=2048)
-    max_chars: int = Field(default=12000, ge=500, le=50000, description="Maximum characters of page text to return")
+    max_chars: int = Field(default=6000, ge=500, le=20000, description="Maximum characters of page text to return")
 
     @field_validator("url")
     @classmethod
@@ -191,16 +201,25 @@ def _looks_like_html(body: bytes) -> bool:
 async def _fetch_url(ctx: ToolContext, args: FetchInput) -> dict[str, Any]:
     cfg = _web(ctx)
     res = await fetch_public(args.url, timeout_s=cfg.timeout_s, max_bytes=int(cfg.max_download_mb * 2**20),
-                             user_agent=USER_AGENT, max_redirects=cfg.max_redirects)
-    host = host_label(res.final_url)
+                             user_agent=USER_AGENT, max_redirects=cfg.max_redirects,
+                             verify=tls_context(cfg.extra_ca_file), total_timeout_s=FETCH_DOWNLOAD_DEADLINE_S)
     if res.status >= 400:
-        raise FetchError(f"{host} answered HTTP {res.status} {res.reason}".strip())
+        raise FetchError(f"{host_label(res.final_url)} answered HTTP {res.status} {res.reason}".strip())
+    # Decoding and parsing a large page takes CPU time: keep it off the event loop, which also carries
+    # this computer's heartbeats and other jobs.
+    return await asyncio.to_thread(_read_page, res, args.max_chars)
+
+
+def _read_page(res: FetchResult, max_chars: int) -> dict[str, Any]:
+    host = host_label(res.final_url)
     ctype = res.content_type
     title = description = ""
     links: list[dict[str, str]] = []
+    truncated = res.truncated
     if ctype in ("text/html", "application/xhtml+xml") or (not ctype and _looks_like_html(res.body)):
         page = html_to_text(decode_body(res.body, res.charset, html=True), res.final_url)
         title, description, text, links = page.title, page.description, page.text, page.links
+        truncated = truncated or page.truncated
     elif ctype == "application/pdf":
         ex = extract(Path("page.pdf"), res.body)
         if ex.status not in ("indexed", "empty"):
@@ -213,15 +232,17 @@ async def _fetch_url(ctx: ToolContext, args: FetchInput) -> dict[str, Any]:
             raise FetchError(f"the link on {host} is a binary file, not a page HomeMesh can read")
     else:
         raise FetchError(f"the link on {host} is a {ctype} file, not a page HomeMesh can read")
+    # Short fields first and the page text last: the chat engine shortens a long text to fit the model's
+    # budget for a tool result, and everything before it stays intact.
     out: dict[str, Any] = {"url": res.url, "final_url": res.final_url, "status": res.status, "content_type": ctype,
-                           "title": title, "content": text[:args.max_chars],
-                           "truncated": len(text) > args.max_chars or res.truncated}
+                           "title": title, "truncated": len(text) > max_chars or truncated}
     if description:
         out["description"] = description
     if res.redirects:
         out["redirected"] = True
     if links:
-        out["links"] = links[:MAX_LINKS_RETURNED]
+        out["links"] = [{"text": lk["text"][:80], "url": lk["url"]} for lk in links[:MAX_LINKS_RETURNED]]
+    out["content"] = text[:max_chars]
     return out
 
 
@@ -275,7 +296,7 @@ FETCH_URL = ToolDefinition(
                                   "the home network are refused. Links the user did not give and no search result "
                                   "contained need the user's approval.",
     input_model=FetchInput, output_description="{final_url, title, content, truncated, links}", handler=_fetch_url,
-    location="node", side_effect="read", permissions=["net.fetch"], timeout_s=60, url_argument="url",
+    location="node", side_effect="read", permissions=["net.fetch"], timeout_s=FETCH_TOOL_TIMEOUT_S, url_argument="url",
 )
 OPEN_URL = ToolDefinition(
     name="open_url", description="Open a web link (http/https) in the default browser on one of the owner's "

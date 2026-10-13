@@ -286,7 +286,18 @@ class ToolService:
 
 
 def tool_result_text(result: dict[str, Any]) -> str:
+    """The tool result as the model sees it, at most MAX_RESULT_CHARS. A long page text is shortened
+    (and marked truncated) so the rest of the result, such as its links, stays valid and visible."""
     text = json.dumps(result, default=str, ensure_ascii=False)
-    if len(text) > MAX_RESULT_CHARS:
-        text = text[:MAX_RESULT_CHARS] + "… (truncated)"
-    return text
+    if len(text) <= MAX_RESULT_CHARS:
+        return text
+    out = result.get("output")
+    if isinstance(out, dict) and isinstance(out.get("content"), str):
+        excess = len(text) - MAX_RESULT_CHARS + 40
+        if excess < len(out["content"]):
+            shorter = {**result, "output": {**out, "content": out["content"][:len(out["content"]) - excess] + " …",
+                                            "truncated": True}}
+            text = json.dumps(shorter, default=str, ensure_ascii=False)
+            if len(text) <= MAX_RESULT_CHARS:
+                return text
+    return text[:MAX_RESULT_CHARS] + "… (truncated)"

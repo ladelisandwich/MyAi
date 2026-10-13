@@ -124,12 +124,15 @@ Plain-HTTP enrollment to a non-loopback coordinator is refused unless `--allow-i
 Off by default; each computer allows them itself in `worker.allowed_tools`. Details:
 [docs/WEB_ACCESS.md](docs/WEB_ACCESS.md).
 
-* `web_search` uses the owner's own SearXNG on `127.0.0.1` (installed per user with rootless Podman,
-  published on loopback only, pinned image, no root). Queries go to public search engines.
+* `web_search` uses the owner's own SearXNG; the installer sets it up per user with rootless Podman,
+  published on `127.0.0.1` only, pinned image, no root. Queries go to public search engines. Any other
+  `web.searxng_url` sends queries over that network or to that operator (`web set-searxng` and
+  `doctor` warn).
 * `fetch_url` connects only to public internet addresses. Private, loopback, link-local (cloud
   metadata), CGNAT/Tailscale, IPv6 local, multicast/reserved and IPv4-in-IPv6 forms are refused, and so
-  is every address on the fetching computer's own networks (its global IPv6 /64 and its own public
-  addresses); a router's public WAN address reached by hairpin NAT can't be detected; every
+  is every address on the fetching computer's own networks (for IPv6 the /48 around each public
+  address, covering the home's other subnets). Not detected: services the owner port-forwarded, when
+  reached through the home's public IPv4 address or a dynamic-DNS name (hairpin NAT); every
   redirect is re-checked; the connection goes to the exact address that was checked (DNS-rebinding
   safe) while TLS is verified against the real host name; only web ports (80, 443, 1024+); environment
   proxies are ignored; size, time and redirect limits apply, and compressed bodies are inflated with a

@@ -179,9 +179,14 @@ class WebSection(_Section):
     safesearch: Literal[0, 1, 2] = 1
     search_language: str = "auto"
     max_results: int = Field(default=8, ge=1, le=20)
-    timeout_s: float = Field(default=20, gt=0, le=120)
+    # Per search request, and per page or redirect for fetch_url (one deadline each). In total a search
+    # stops after 40 s and a fetch_url call after 60 s.
+    timeout_s: float = Field(default=20, gt=0, le=30)
     max_download_mb: float = Field(default=5, gt=0, le=50)
     max_redirects: int = Field(default=5, ge=0, le=10)
+    # Extra CA certificate (PEM) to trust for fetch_url, e.g. the root of antivirus software that
+    # inspects HTTPS. Mozilla's list stays in use; verification is never turned off.
+    extra_ca_file: str = ""
 
     @field_validator("searxng_url")
     @classmethod

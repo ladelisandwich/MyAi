@@ -53,8 +53,9 @@ First working version.
 
 * **Internet access (opt-in per computer):** `web_search` through the owner's own SearXNG,
   `fetch_url` for public pages (private/local addresses refused on every redirect, DNS-rebinding safe,
-  HTTPS verified, size/time limits; approval for addresses that neither the user nor a web result
-  supplied), and `open_url` to open a link in a computer's browser (approval every time). Rootless,
+  HTTPS verified, size/time limits, page text extracted off the event loop in linear time; no approval only for links the user wrote and up to 3 search
+  results per answer, one per site; links found on pages always ask), and `open_url` to open a link in
+  a computer's browser (approval every time). Rootless,
   loopback-only SearXNG Quadlet and installer for Bazzite (`deploy/bazzite/install-searxng.sh`),
   `[web]` settings, `homemesh worker allow-tool/disallow-tool`, `homemesh web set-searxng/test`.
   Approval cards now name the computer and say why they ask. Guide: docs/WEB_ACCESS.md.
