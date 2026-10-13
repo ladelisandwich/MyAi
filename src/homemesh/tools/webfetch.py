@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import codecs
+import ipaddress
 import re
 import socket
 import ssl
@@ -28,6 +29,7 @@ from dataclasses import dataclass, field
 from urllib.parse import SplitResult, urljoin, urlsplit, urlunsplit
 
 import httpx
+import psutil
 
 from homemesh.tools.urlsafety import UnsafeURL, is_public_address, normalize_url
 
@@ -70,6 +72,51 @@ async def system_resolver(host: str, port: int) -> list[str]:
     return out
 
 
+def local_networks() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    """This computer's own addresses and the networks they are on (read fresh each time, because
+    IPv6 privacy addresses change). At home, devices usually have *global* IPv6 addresses (and the
+    computer itself does), so "is it a public address?" alone would let fetch_url reach the PC,
+    the router or a NAS over IPv6."""
+    nets: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    try:
+        interfaces = psutil.net_if_addrs()
+    except (OSError, RuntimeError):
+        return nets
+    for addrs in interfaces.values():
+        for a in addrs:
+            if a.family not in (socket.AF_INET, socket.AF_INET6):
+                continue
+            try:
+                ip = ipaddress.ip_address(a.address.split("%", 1)[0])
+            except ValueError:
+                continue
+            prefix = ip.max_prefixlen
+            if a.netmask:
+                try:
+                    prefix = bin(int(ipaddress.ip_address(a.netmask.split("/")[0]))).count("1") or prefix
+                except ValueError:
+                    prefix = ip.max_prefixlen
+            elif ip.version == 6:
+                prefix = 64  # Windows may not report IPv6 netmasks; home LANs are /64
+            nets.append(ipaddress.ip_network(f"{ip}/{prefix}", strict=False))
+    return nets
+
+
+def default_address_policy() -> Callable[[str], bool]:
+    """Public internet addresses only, and none on this computer's own networks."""
+    nets = local_networks()
+
+    def allowed(address: str) -> bool:
+        if not is_public_address(address):
+            return False
+        ip = ipaddress.ip_address(address.split("%", 1)[0])
+        if ip.version == 6 and ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
+        return not any(ip.version == n.version and ip in n for n in nets)
+
+    return allowed
+
+
 def _netloc_for(ip: str, port: int | None) -> str:
     host = f"[{ip}]" if ":" in ip else ip
     return f"{host}:{port}" if port else host
@@ -85,9 +132,10 @@ def _host_header(parts: SplitResult) -> str:
 async def fetch_public(url: str, *, timeout_s: float = 20.0, max_bytes: int = 5 * 2**20, user_agent: str,
                        accept: str = "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5",
                        max_redirects: int = 5, resolver: Resolver | None = None,
-                       address_allowed: Callable[[str], bool] = is_public_address,
+                       address_allowed: Callable[[str], bool] | None = None,
                        verify: ssl.SSLContext | bool = True) -> FetchResult:
     resolve = resolver or system_resolver
+    address_allowed = address_allowed or default_address_policy()
     try:
         current = normalize_url(url)
     except UnsafeURL as exc:
@@ -109,8 +157,8 @@ async def fetch_public(url: str, *, timeout_s: float = 20.0, max_bytes: int = 5 
         blocked = [a for a in addresses if not address_allowed(a)]
         if blocked:
             raise BlockedAddress(
-                f"{host} points to a private or local network address ({blocked[0]}). HomeMesh only fetches "
-                "pages on the public internet, never your home network.")
+                f"{host} points to a private or local network address ({blocked[0]}), or one on this computer's "
+                "own network. HomeMesh only fetches pages on the public internet, never your home network.")
         last_error: Exception | None = None
         for ip in addresses:
             target = urlunsplit((parts.scheme, _netloc_for(ip, parts.port), parts.path or "/", parts.query, ""))
@@ -118,8 +166,11 @@ async def fetch_public(url: str, *, timeout_s: float = 20.0, max_bytes: int = 5 
             headers = {"Host": _host_header(parts), "User-Agent": user_agent, "Accept": accept,
                        "Accept-Language": "en;q=0.9, *;q=0.5", "Accept-Encoding": "gzip, deflate"}
             try:
-                async with httpx.AsyncClient(trust_env=False, follow_redirects=False, verify=verify,
-                                             timeout=httpx.Timeout(timeout_s)) as client:
+                # One deadline for the whole hop (connect, headers and body): httpx's own timeouts apply
+                # per read, so a server dripping a byte at a time could otherwise hold the fetch open.
+                async with asyncio.timeout(timeout_s), httpx.AsyncClient(
+                        trust_env=False, follow_redirects=False, verify=verify,
+                        timeout=httpx.Timeout(timeout_s)) as client:
                     request = client.build_request("GET", target, headers=headers, extensions=extensions)
                     response = await client.send(request, stream=True)
                     try:
@@ -142,8 +193,10 @@ async def fetch_public(url: str, *, timeout_s: float = 20.0, max_bytes: int = 5 
             except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
                 last_error = exc
                 continue
-            except httpx.TimeoutException as exc:
-                raise FetchError(f"{host} did not answer within {timeout_s:.0f} seconds") from exc
+            except (httpx.TimeoutException, TimeoutError) as exc:
+                raise FetchError(f"{host} did not send the page within {timeout_s:.0f} seconds") from exc
+            except httpx.InvalidURL as exc:  # e.g. a malformed Location header, parsed by httpx itself
+                raise FetchError(f"{host} sent a malformed redirect ({exc})") from exc
             except httpx.HTTPError as exc:
                 raise FetchError(f"could not fetch {host}: {_describe(exc)}") from exc
         else:
@@ -158,15 +211,19 @@ class _Inflater:
 
     def __init__(self, encoding: str) -> None:
         self.encoding = encoding
-        self._first = True
+        self._head = b"" if encoding == "deflate" else None  # bytes held until the format is known
         wbits = 16 + zlib.MAX_WBITS if encoding == "gzip" else zlib.MAX_WBITS
         self._d = zlib.decompressobj(wbits)
 
     def feed(self, data: bytes, limit: int) -> bytes:
-        if self._first and self.encoding == "deflate" and data:
-            self._first = False
-            # "deflate" is zlib-wrapped by the standard, but some servers send raw deflate.
-            if (data[0] & 0x0F) != 8 or (data[0] << 8 | (data[1] if len(data) > 1 else 0)) % 31:
+        if self._head is not None:
+            # "deflate" is zlib-wrapped by the standard, but some servers send raw deflate. Decide
+            # from the 2-byte zlib header, even if it arrives split across network chunks.
+            self._head += data
+            if len(self._head) < 2:
+                return b""
+            data, self._head = self._head, None
+            if (data[0] & 0x0F) != 8 or ((data[0] << 8) | data[1]) % 31:
                 self._d = zlib.decompressobj(-zlib.MAX_WBITS)
         out = bytearray()
         pending = data

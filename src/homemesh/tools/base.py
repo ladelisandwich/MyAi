@@ -56,8 +56,8 @@ class ToolDefinition:
     # come from the user or an earlier web result in the same conversation needs the user's
     # approval, so a model cannot quietly send data out by putting it into a URL.
     url_argument: str | None = None
-    # Optional extra line for the approval card, computed from the validated arguments.
-    approval_note: Callable[[Any], str | None] | None = None
+    # Optional extra line for the approval card, computed from the validated arguments (may be async).
+    approval_note: Callable[[Any], Any] | None = None
 
     @property
     def requires_approval(self) -> bool:

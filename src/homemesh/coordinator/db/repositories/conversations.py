@@ -137,6 +137,13 @@ class MessageRepo(Repo):
             (conversation_id, limit))
         return [decode(r, **_MSG_JSON) for r in rows]  # type: ignore[misc]
 
+    async def user_texts(self, conversation_id: str, limit: int = 5000) -> list[str]:
+        """What the user wrote in a conversation, newest first (for links the user supplied)."""
+        rows = await self.db.fetchall(
+            "SELECT content FROM messages WHERE conversation_id=? AND role='user' ORDER BY created_at DESC, rowid DESC"
+            " LIMIT ?", (conversation_id, limit))
+        return [r["content"] or "" for r in rows]
+
     async def update(self, message_id: str, **fields: Any) -> None:
         sets, vals = [], []
         for k, v in fields.items():

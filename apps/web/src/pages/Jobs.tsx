@@ -95,7 +95,9 @@ export default function JobsPage({ route }: { route: Route }) {
           <h2>Waiting for your approval</h2>
           {data.approvals.map((a) => (
             <div key={a.id} className="list-item row">
-              <div style={{ flex: 1 }}><strong>{a.tool_name}</strong> <Badge kind="warn">{a.side_effect}</Badge> <span className="faint small">requested {relTime(a.requested_at)}</span>
+              <div style={{ flex: 1 }}><strong>{a.tool_name}</strong> <Badge kind="warn">{a.side_effect}</Badge>{a.details_json?.node_name ? <span className="small"> on <strong>{a.details_json.node_name}</strong></span> : null} <span className="faint small">requested {relTime(a.requested_at)}</span>
+                {a.details_json?.reason && <div className="small">{a.details_json.reason}</div>}
+                {a.details_json?.note && <div className="small warn-text">{a.details_json.note}</div>}
                 <pre className="block" style={{ marginTop: 4 }}>{JSON.stringify(a.arguments_json, null, 2)}</pre></div>
               <button className="btn ok solid sm" onClick={async () => { try { await api.post(`/api/v1/tools/approvals/${a.id}`, { approved: true }); void reload(); } catch (e) { toast.error(e); } }}>Approve</button>
               <button className="btn danger sm" onClick={async () => { try { await api.post(`/api/v1/tools/approvals/${a.id}`, { approved: false }); void reload(); } catch (e) { toast.error(e); } }}>Deny</button>

@@ -9,7 +9,8 @@ Test directives (in the last user message):
 
 * ``[[mock:fail]]``            - fail mid-stream with a backend error
 * ``[[mock:slow]]``            - stream slowly (for cancellation / disconnect tests)
-* ``[[mock:tool:NAME {json}]]`` - request a tool call (only when tools were offered)
+* ``[[mock:tool:NAME {json}]]`` - request a tool call (only when tools were offered); several
+  directives in one message become several calls in the same round
 * ``[[mock:oom]]``             - fail as if the model did not fit in memory
 """
 
@@ -109,10 +110,11 @@ class MockBackend(InferenceBackend):
         if last is not None and last.role == "tool":
             reply = f"{MOCK_PREFIX} Tool {last.tool_name or 'tool'} returned: {last.content[:300]}"
         else:
-            m = _TOOL_RE.search(text_in)
-            if m and payload.tools and any(t.name == m.group(1) for t in payload.tools):
-                args = json.loads(m.group(2)) if m.group(2) else {}
-                yield ChatChunk(kind="tool_calls", tool_calls=[ToolCall(name=m.group(1), arguments=args)])
+            offered = {t.name for t in payload.tools or []}
+            calls = [ToolCall(name=m.group(1), arguments=json.loads(m.group(2)) if m.group(2) else {})
+                     for m in _TOOL_RE.finditer(text_in) if m.group(1) in offered]
+            if calls:  # every directive in the message becomes one call of the same round
+                yield ChatChunk(kind="tool_calls", tool_calls=calls)
                 yield ChatChunk(kind="done", finish_reason="tool_calls",
                                 metrics=GenerationMetrics(total_ms=round((time.perf_counter() - t0) * 1000, 2)),
                                 model=payload.model)

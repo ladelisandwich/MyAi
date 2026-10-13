@@ -138,3 +138,30 @@ async def test_open_url_always_asks_and_names_the_computer(h, monkeypatch):
     events = await _chat(c, conv["id"], '[[mock:tool:open_url {"url": "http://192.168.1.1/"}]]', decide=False)
     assert "your own network" in dict(events)["approval_required"]["note"]
     assert opened == ["https://www.youtube.com/"]
+
+
+async def test_search_results_are_read_without_asking_only_a_few_per_answer_and_one_per_site(h, private_dns):
+    results = [{"url": u, "title": u, "content": "", "engine": "x"} for u in (
+        "https://a.example/1", "https://b.example/1", "https://c.example/1", "https://d.example/1",
+        "https://a.example/2")]
+    searx_json = {**SEARX, "results": results}
+    async with Server({"/search": (200, {"Content-Type": "application/json"}, json.dumps(searx_json).encode())}) as sx:
+        await h.add_worker("bazzite", models={"mock-chat": ["completion", "tools"]},
+                           allowed_tools=["web_search", "fetch_url"],
+                           web={"searxng_url": f"http://127.0.0.1:{sx.port}"})
+        c = h.client
+        conv = (await c.post("/api/v1/conversations", json={})).json()
+        await _chat(c, conv["id"], _call("web_search", {"query": "x"}))
+        four = "".join(_call("fetch_url", {"url": u}) for u in (
+            "https://a.example/1", "https://b.example/1", "https://c.example/1", "https://d.example/1"))
+        events = await _chat(c, conv["id"], four, decide=False)
+        asked = [d["arguments"]["url"] for e, d in events if e == "approval_required"]
+        assert asked == ["https://d.example/1"]  # three sites without asking, the fourth asks
+        assert "already read 3 pages" in next(d for e, d in events if e == "approval_required")["reason"]
+        same_site = _call("fetch_url", {"url": "https://a.example/1"}) + _call("fetch_url", {"url": "https://a.example/2"})
+        events = await _chat(c, conv["id"], same_site, decide=False)
+        asked = [d for e, d in events if e == "approval_required"]
+        assert [d["arguments"]["url"] for d in asked] == ["https://a.example/2"] and "this site" in asked[0]["reason"]
+        # The approval list (Jobs page, other devices) shows the same details as the chat card.
+        pending = (await c.get("/api/v1/tools/approvals")).json()
+        assert any((a.get("details_json") or {}).get("node_name") == "bazzite" for a in pending)

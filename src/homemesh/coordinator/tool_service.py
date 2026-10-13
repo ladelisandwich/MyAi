@@ -12,9 +12,11 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from datetime import timedelta
 from typing import Any
+from urllib.parse import urlsplit
 
 from homemesh.common.errors import NotFoundError, ValidationFailed
 from homemesh.common.logging import get_logger
@@ -27,12 +29,22 @@ from homemesh.coordinator.settings_service import SettingsService
 from homemesh.protocol.jobs import ToolCall, ToolSpec
 from homemesh.scheduler.policy import TaskRequirements
 from homemesh.tools.base import ToolContext, ToolDefinition
-from homemesh.tools.builtin.web import WEB_RESULT_TOOLS, urls_in_output
+from homemesh.tools.builtin.web import WEB_RESULT_TOOLS, result_urls
 from homemesh.tools.registry import ToolArgumentError, ToolRegistry
 from homemesh.tools.urlsafety import extract_urls, url_key
 
 log = get_logger(__name__)
 MAX_RESULT_CHARS = 8000
+# fetch_url calls per answer that may run without asking (each from a different site), for addresses
+# that came from search results or earlier pages. Addresses the user wrote never count.
+AUTO_FETCHES_PER_ANSWER = 3
+GENERIC_FETCH_REASON = ("This web address did not come from you or from a search result, so HomeMesh asks "
+                        "before contacting it.")
+
+
+def _site(url: str) -> str:
+    host = (urlsplit(url).hostname or "").lower()
+    return host[4:] if host.startswith("www.") else host
 
 
 class ToolService:
@@ -165,26 +177,29 @@ class ToolService:
         needs_approval = tool.requires_approval or (p is not None and p["approval"] == "always")
         reason = None
         if not needs_approval and tool.url_argument and isinstance(args.get(tool.url_argument), str):
-            if not await self._url_known(args[tool.url_argument], conversation_id):
-                needs_approval = True
-                reason = ("This web address did not come from you or from an earlier search result or page in "
-                          "this conversation, so HomeMesh asks before contacting it.")
+            reason = await self._unasked_fetch_refusal(tool.name, args[tool.url_argument], conversation_id, message_id)
+            needs_approval = reason is not None
         approval_id = None
         if needs_approval:
             timeout_s = (await self.settings.section("tools"))["approval_timeout_s"]
+            conn = self.nodes.get(node_id) if node_id else None
+            details: dict[str, Any] = {"node_name": conn.name if conn else None}
+            if reason:
+                details["reason"] = reason
+            if tool.approval_note:
+                note = tool.approval_note(parsed)
+                if inspect.isawaitable(note):
+                    note = await note
+                if note:
+                    details["note"] = note
             approval = await self.repos.tools.create_approval(
                 user_id=user_id, tool_name=tool.name, arguments=args, node_id=node_id,
                 conversation_id=conversation_id, message_id=message_id, side_effect=tool.side_effect,
-                expires_at=iso(utcnow() + timedelta(seconds=timeout_s)))
+                expires_at=iso(utcnow() + timedelta(seconds=timeout_s)), details=details)
             approval_id = approval["id"]
-            conn = self.nodes.get(node_id) if node_id else None
             event = {"approval_id": approval_id, "tool": tool.name, "arguments": args, "side_effect": tool.side_effect,
-                     "description": tool.description, "node_id": node_id, "node_name": conn.name if conn else None,
-                     "expires_at": approval["expires_at"], "conversation_id": conversation_id}
-            if reason:
-                event["reason"] = reason
-            if tool.approval_note and (note := tool.approval_note(parsed)):
-                event["note"] = note
+                     "description": tool.description, "node_id": node_id, "expires_at": approval["expires_at"],
+                     "conversation_id": conversation_id, **details}
             self.bus.publish("approval.requested", event, user_id=user_id)
             if emit:
                 await emit("approval_required", event)
@@ -208,19 +223,39 @@ class ToolService:
                                                 "side_effect": tool.side_effect})
         return result
 
-    async def _url_known(self, url: str, conversation_id: str | None) -> bool:
-        """Did this exact address appear in the user's own messages or in an earlier web result of
-        this conversation? (Host, path and query must match; see ``url_key``.)"""
+    async def _unasked_fetch_refusal(self, tool_name: str, url: str, conversation_id: str | None,
+                                     message_id: str | None) -> str | None:
+        """Why this fetch needs the user's approval, or None if it may run without asking.
+
+        A model that read a malicious page can be talked into sending data out in the addresses it
+        fetches. So without asking, HomeMesh only fetches addresses that (a) the user wrote in this
+        conversation, or (b) a search result or an earlier fetched page itself supplied, at most a few
+        per answer and one per site. Links found on a page always ask: the page chooses them, and
+        could offer a set of links that spells out data by which ones get fetched.
+        """
         key = url_key(url)
         if key is None or not conversation_id:
-            return False
-        for m in await self.repos.messages.list(conversation_id):
-            if m["role"] == "user" and any(url_key(u) == key for u in extract_urls(m.get("content") or "")):
-                return True
-        for out in await self.repos.tools.results_in_conversation(conversation_id, list(WEB_RESULT_TOOLS)):
-            if any(url_key(u) == key for u in urls_in_output(out)):
-                return True
-        return False
+            return GENERIC_FETCH_REASON
+        user_keys = {url_key(u) for text in await self.repos.messages.user_texts(conversation_id)
+                     for u in extract_urls(text)}
+        if key in user_keys:
+            return None
+        offered = {url_key(u) for name, out in
+                   await self.repos.tools.results_in_conversation(conversation_id, list(WEB_RESULT_TOOLS))
+                   for u in result_urls(name, out)}
+        if key not in offered:
+            return GENERIC_FETCH_REASON
+        earlier = [r["arguments_json"].get("url") for r in
+                   (await self.repos.tools.runs_in_message(message_id, tool_name) if message_id else [])
+                   if not r.get("approval_id") and r["status"] != "denied"]
+        automatic = [u for u in earlier if isinstance(u, str) and url_key(u) not in user_keys]
+        if len(automatic) >= AUTO_FETCHES_PER_ANSWER:
+            return (f"HomeMesh already read {len(automatic)} pages for this answer without asking, so it asks "
+                    "before reading more.")
+        site = _site(url)
+        if any(_site(u) == site for u in automatic):
+            return "HomeMesh already read a page from this site for this answer without asking."
+        return None
 
     async def _run(self, tool: ToolDefinition, parsed: Any, raw_args: dict[str, Any], node_id: str | None,
                    approval_id: str | None, user_id: str, conversation_id: str | None) -> dict[str, Any]:

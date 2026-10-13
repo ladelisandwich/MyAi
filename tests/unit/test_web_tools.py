@@ -65,8 +65,10 @@ def test_only_public_addresses_are_public(address, public):
     assert is_public_address(address) is public
 
 
-def test_url_key_ignores_scheme_www_and_trailing_slash_but_not_path_or_query():
+def test_url_key_ignores_scheme_www_and_one_trailing_slash_but_nothing_else():
     assert url_key("https://www.youtube.com/") == url_key("http://youtube.com") == "youtube.com"
+    assert url_key("https://example.com/page") == url_key("https://example.com/page/")
+    assert url_key("https://example.com/page") != url_key("https://example.com/page" + "/" * 9)  # no slash code
     assert url_key("https://example.com/a?x=1") != url_key("https://example.com/a?x=1&leak=secret")
     assert url_key("https://example.com/a") != url_key("https://example.com/a/secret")
     assert url_key("javascript:alert(1)") is None
@@ -75,6 +77,19 @@ def test_url_key_ignores_scheme_www_and_trailing_slash_but_not_path_or_query():
 def test_extract_urls_finds_full_and_bare_links():
     text = "open youtube.com and read https://example.org/a?b=1). Mail me at foo@bar.com, e.g. www.bbc.co.uk/news."
     assert extract_urls(text) == ["https://example.org/a?b=1", "https://youtube.com/", "https://www.bbc.co.uk/news"]
+
+
+@pytest.mark.parametrize(("text", "url"), [
+    ("Read https://en.wikipedia.org/wiki/Python_(programming_language) please",
+     "https://en.wikipedia.org/wiki/Python_(programming_language)"),
+    ("(see https://a.example/x).", "https://a.example/x"),
+    ("see https://example.com/__init__", "https://example.com/__init__"),
+    ("\u8bf7\u9605\u8bfb https://example.com/page\u3002\u8c22\u8c22", "https://example.com/page"),
+    ("\u201ehttps://example.de/seite\u201c", "https://example.de/seite"),
+    ("x [link](https://md.example/p) y", "https://md.example/p"),
+])
+def test_extract_urls_keeps_the_link_the_user_meant(text, url):
+    assert extract_urls(text) == [url]
 
 
 def test_html_to_text_keeps_content_and_links_drops_scripts_and_chrome():
@@ -315,8 +330,10 @@ async def test_web_search_queries_searxng_json_and_cleans_results():
     assert out["results"][0]["title"] == "Best pancakes" and out["results"][0]["snippet"] == "Fluffy pancakes"
     assert out["infobox"]["url"] == "https://en.wikipedia.org/wiki/Pancake"
     assert out["unresponsive_engines"] == ["google: CAPTCHA"] and out["suggestions"] == ["crepes"]
-    assert set(web.urls_in_output(out)) == {"https://recipes.example/pancakes", "https://other.example/",
-                                            "https://en.wikipedia.org/wiki/Pancake"}
+    assert set(web.result_urls("web_search", out)) == {"https://recipes.example/pancakes", "https://other.example/",
+                                                       "https://en.wikipedia.org/wiki/Pancake"}
+    page = {"url": "https://a.example/", "final_url": "https://a.example/home", "links": [{"url": "https://evil.example/"}]}
+    assert web.result_urls("fetch_url", page) == ["https://a.example/", "https://a.example/home"]  # never page links
 
 
 async def test_web_search_explains_setup_problems():
@@ -335,15 +352,22 @@ async def test_web_search_explains_setup_problems():
 # --------------------------------------------------------------------------- open_url tool
 
 
-def test_open_url_always_needs_approval_and_only_takes_web_links():
+async def test_open_url_always_needs_approval_and_only_takes_web_links(monkeypatch):
     tool = web.OPEN_URL
     assert tool.requires_approval and tool.location == "node" and "open_url" not in WebSection.model_fields
     with pytest.raises(ToolArgumentError):
         ToolRegistry.validate_args(tool, {"url": "file:///C:/Windows/System32/calc.exe"})
     assert ToolRegistry.validate_args(tool, {"url": "https://www.YouTube.com"}).url == "https://www.youtube.com/"
-    assert web._open_url_note(ToolRegistry.validate_args(tool, {"url": "https://www.youtube.com"})) is None
-    for local in ("http://192.168.1.1/", "http://router.lan/", "http://nas.local:5000/", "http://localhost:8080/"):
-        assert "your own network" in web._open_url_note(ToolRegistry.validate_args(tool, {"url": local}))
+
+    async def dns(host, port):
+        return {"www.youtube.com": ["142.250.1.1"], "192.168.1.1.nip.io": ["192.168.1.1"]}[host]
+
+    monkeypatch.setattr(web, "system_resolver", dns)
+    note = web._open_url_note
+    assert await note(ToolRegistry.validate_args(tool, {"url": "https://www.youtube.com"})) is None
+    for local in ("http://192.168.1.1/", "http://router.lan/", "http://nas.local:5000/", "http://localhost:8080/",
+                  "http://fritz.box/", "http://router.localdomain/", "http://192.168.1.1.nip.io/"):
+        assert "your own network" in await note(ToolRegistry.validate_args(tool, {"url": local})), local
 
 
 async def test_worker_refuses_open_url_without_an_approval(monkeypatch):
@@ -399,6 +423,46 @@ async def test_open_in_browser_on_linux_needs_a_desktop_session(monkeypatch, tmp
     monkeypatch.setenv("FAKE_EXIT", "3")
     with pytest.raises(OSError, match="exit code 3"):
         await desktop.open_in_browser("https://example.com/")
+
+
+def test_fetch_policy_refuses_this_computers_own_networks_even_with_global_ipv6(monkeypatch):
+    import socket
+    from types import SimpleNamespace
+
+    addr = SimpleNamespace
+    interfaces = {"eth0": [
+        addr(family=socket.AF_INET, address="192.168.50.10", netmask="255.255.255.0"),
+        addr(family=socket.AF_INET6, address="2a02:8109:b6c0:1d00::10", netmask="ffff:ffff:ffff:ffff::"),
+        addr(family=socket.AF_INET6, address="fe80::1%eth0", netmask=None),
+    ], "wan": [addr(family=socket.AF_INET, address="93.184.215.14", netmask="255.255.255.255")]}
+    monkeypatch.setattr(webfetch.psutil, "net_if_addrs", lambda: interfaces)
+    allowed = webfetch.default_address_policy()
+    assert not allowed("2a02:8109:b6c0:1d00:3e7c:3fff:fe12:3456")  # a NAS on the same IPv6 /64
+    assert not allowed("2a02:8109:b6c0:1d00::10")  # this computer
+    assert not allowed("93.184.215.14")  # this computer's public address
+    assert allowed("2606:4700::1111") and allowed("8.8.8.8")
+
+
+async def test_malformed_redirects_slow_pages_and_split_deflate_headers():
+    import zlib
+
+    payload = zlib.compress(b"hello world " * 100)
+    routes = {
+        "/bad-redirect": (302, {"Location": "http:next-page"}, b""),
+        "/drip": (200, {"Content-Type": "text/plain"}, [(0.3, b"x")] * 30),
+        "/split": (200, {"Content-Type": "text/plain", "Content-Encoding": "deflate"},
+                   [(0.0, payload[:1]), (0.2, payload[1:])]),
+    }
+    async with Server(routes) as s:
+        kw = {"user_agent": UA, "resolver": fake_dns({"site.test": ["127.0.0.1"]}), "address_allowed": loopback_is_public}
+        with pytest.raises(FetchError, match="malformed redirect"):
+            await fetch_public(f"http://site.test:{s.port}/bad-redirect", **kw)
+        t0 = asyncio.get_running_loop().time()
+        with pytest.raises(FetchError, match="within 1 seconds"):
+            await fetch_public(f"http://site.test:{s.port}/drip", timeout_s=1, **kw)
+        assert asyncio.get_running_loop().time() - t0 < 3  # one deadline per page, not per read
+        res = await fetch_public(f"http://site.test:{s.port}/split", **kw)
+        assert res.body == b"hello world " * 100
 
 
 def test_web_tools_are_not_allowed_anywhere_by_default():

@@ -406,13 +406,16 @@ def cmd_web(ctx: Ctx) -> int:
     try:
         if a.fetch:
             args = ToolRegistry.validate_args(FETCH_URL, {"url": a.fetch, "max_chars": 1500})
-            out = asyncio.run(FETCH_URL.handler(tctx, args))
+            out = asyncio.run(asyncio.wait_for(FETCH_URL.handler(tctx, args), FETCH_URL.timeout_s))
             print(f"✓ {out['final_url']} (HTTP {out['status']}, {out['content_type']})")
             print(f"  Title: {out['title'] or '(none)'}")
             print("  " + out["content"][:600].replace("\n", "\n  "))
             return EXIT_OK
         args = ToolRegistry.validate_args(WEB_SEARCH, {"query": a.query, "max_results": 5})
-        out = asyncio.run(WEB_SEARCH.handler(tctx, args))
+        out = asyncio.run(asyncio.wait_for(WEB_SEARCH.handler(tctx, args), WEB_SEARCH.timeout_s))
+    except TimeoutError:
+        print("✗ No answer in time (the site or SearXNG is too slow).")
+        return EXIT_ERROR
     except (ToolArgumentError, OSError, ValueError) as exc:
         print(f"✗ {exc}")
         return EXIT_ERROR

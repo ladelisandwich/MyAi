@@ -127,14 +127,19 @@ Off by default; each computer allows them itself in `worker.allowed_tools`. Deta
 * `web_search` uses the owner's own SearXNG on `127.0.0.1` (installed per user with rootless Podman,
   published on loopback only, pinned image, no root). Queries go to public search engines.
 * `fetch_url` connects only to public internet addresses. Private, loopback, link-local (cloud
-  metadata), CGNAT/Tailscale, IPv6 local, multicast/reserved and IPv4-in-IPv6 forms are refused; every
+  metadata), CGNAT/Tailscale, IPv6 local, multicast/reserved and IPv4-in-IPv6 forms are refused, and so
+  is every address on the fetching computer's own networks (its global IPv6 /64 and its own public
+  addresses); a router's public WAN address reached by hairpin NAT can't be detected; every
   redirect is re-checked; the connection goes to the exact address that was checked (DNS-rebinding
   safe) while TLS is verified against the real host name; only web ports (80, 443, 1024+); environment
   proxies are ignored; size, time and redirect limits apply, and compressed bodies are inflated with a
   hard limit (no decompression bombs).
-* **Exfiltration guard:** `fetch_url` needs an approval for any address that the user did not write in
-  the conversation and that no earlier search result or fetched page contained (exact host, path and
-  query), so injected instructions can't quietly send data out in a URL. Search queries are written by
+* **Exfiltration guard:** `fetch_url` runs without approval only for addresses the user wrote in the
+  conversation, or that a search result or an earlier fetch itself supplied (exact host, port, path and
+  query; only http/https, `www.` and one trailing slash may differ), and of the latter at most 3 per
+  answer and one per site. Links found on fetched pages always ask, because the page chooses them and
+  could offer a set of links whose selection spells out data. The remaining channel (which of a few
+  search results gets read) is a few bits per answer. Search queries are written by
   the model and are not checked this way; set `web_search` to *ask every time* if that matters to you.
 * `open_url` is a `write` tool: it always needs approval, shows the exact canonical link and the
   computer, flags links into the local network, and accepts only `http(s)` URLs (never files,

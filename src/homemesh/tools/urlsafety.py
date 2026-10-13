@@ -163,8 +163,9 @@ def host_label(url: str) -> str:
 def url_key(url: str) -> str | None:
     """Comparison key for "has this address been seen in the conversation?".
 
-    Scheme, a leading ``www.``, a default port, a trailing slash and the fragment are ignored;
-    host, path and query must match exactly, so a model cannot append data to a known link.
+    Only the scheme (http/https), a leading ``www.``, one trailing slash and the fragment are
+    ignored. Host, port, the rest of the path and the query must match exactly, so a model cannot
+    hide data in a known link (extra path, query, or a run of slashes).
     """
     try:
         norm = normalize_url(url)
@@ -174,15 +175,33 @@ def url_key(url: str) -> str | None:
     host = parts.netloc.lower()
     if host.startswith("www."):
         host = host[4:]
-    path = parts.path.rstrip("/")
+    path = parts.path[:-1] if parts.path.endswith("/") else parts.path
     return f"{host}{path}" + (f"?{parts.query}" if parts.query else "")
 
 
-_URL_RE = re.compile(r"https?://[^\s<>\"'`]+", re.IGNORECASE)
+# A link ends at whitespace, ASCII quotes/angle brackets, or Unicode punctuation that surrounds or
+# ends text in many languages: CJK full stop, comma and brackets, curly and low quotes, guillemets.
+_STOP = "\\s<>\"'`\u3002\uff0c\u3001\u300c\u300d\u300e\u300f\uff08\uff09\u201c\u201d\u201e\u201f\u00ab\u00bb\u2039\u203a"
+_URL_RE = re.compile(rf"https?://[^{_STOP}]+", re.IGNORECASE)
 # Bare domains such as "example.com/page" typed by the user (TLD of 2+ letters).
-_BARE_RE = re.compile(r"(?<![\w@./-])(?:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\.)+[a-z]{2,63}(?:/[^\s<>\"'`]*)?",
+_BARE_RE = re.compile(rf"(?<![\w@./-])(?:[a-z0-9](?:[a-z0-9-]{{0,62}}[a-z0-9])?\.)+[a-z]{{2,63}}(?:/[^{_STOP}]*)?",
                       re.IGNORECASE)
-_TRAILING = ".,;:!?)]}'\"*_"
+_TRAILING = ".,;:!?*"
+_PAIRS = {")": "(", "]": "[", "}": "{"}
+
+
+def _trim(raw: str) -> str:
+    """Drop sentence punctuation after a link, and a closing bracket only if it has no partner in the
+    link (so ``https://en.wikipedia.org/wiki/Python_(programming_language)`` stays whole)."""
+    while raw:
+        last = raw[-1]
+        if last in _TRAILING:
+            raw = raw[:-1]
+        elif last in _PAIRS and raw.count(last) > raw.count(_PAIRS[last]):
+            raw = raw[:-1]
+        else:
+            break
+    return raw
 
 
 def extract_urls(text: str, limit: int = 200) -> list[str]:
@@ -194,9 +213,8 @@ def extract_urls(text: str, limit: int = 200) -> list[str]:
     rest = _URL_RE.sub(" ", text)
     found += ["https://" + m.group(0) for m in _BARE_RE.finditer(rest)]
     for raw in found:
-        raw = raw.rstrip(_TRAILING)
         try:
-            out.append(normalize_url(raw))
+            out.append(normalize_url(_trim(raw)))
         except UnsafeURL:
             continue
         if len(out) >= limit:

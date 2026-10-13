@@ -17,6 +17,7 @@ as data, never as instructions.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import ipaddress
 import re
@@ -32,8 +33,8 @@ from homemesh.knowledge.extract import extract
 from homemesh.tools.base import ToolContext, ToolDefinition
 from homemesh.tools.desktop import open_in_browser
 from homemesh.tools.htmltext import html_to_text
-from homemesh.tools.urlsafety import UnsafeURL, host_label, normalize_url
-from homemesh.tools.webfetch import FetchError, decode_body, fetch_public
+from homemesh.tools.urlsafety import UnsafeURL, host_label, is_public_address, normalize_url
+from homemesh.tools.webfetch import FetchError, decode_body, fetch_public, system_resolver
 
 # Tools whose results contain links the model may follow without asking (see ToolService._url_known).
 WEB_RESULT_TOOLS = ("web_search", "fetch_url")
@@ -43,21 +44,21 @@ _TEXT_TYPES = {"application/json", "application/ld+json", "application/xml", "ap
                "application/atom+xml", "application/javascript", "application/x-yaml", "application/yaml"}
 
 
-def urls_in_output(output: Any, limit: int = 500) -> list[str]:
-    """Every ``url``/``final_url`` value in a web tool's stored output."""
-    found: list[str] = []
-    stack = [output]
-    while stack and len(found) < limit:
-        item = stack.pop()
-        if isinstance(item, dict):
-            for k, v in item.items():
-                if k in ("url", "final_url") and isinstance(v, str):
-                    found.append(v)
-                elif isinstance(v, (dict, list)):
-                    stack.append(v)
-        elif isinstance(item, list):
-            stack.extend(item)
-    return found
+def result_urls(tool_name: str, output: Any) -> list[str]:
+    """Addresses a web tool's result offers to read next: search results (and the infobox source) of
+    web_search, and the page itself for fetch_url. Links found *on* a fetched page are deliberately
+    not included: that page may be the one trying to steer the model (see ToolService)."""
+    if not isinstance(output, dict):
+        return []
+    urls: list[Any] = []
+    if tool_name == "web_search":
+        urls += [r.get("url") for r in output.get("results") or [] if isinstance(r, dict)]
+        box = output.get("infobox")
+        if isinstance(box, dict):
+            urls.append(box.get("url"))
+    elif tool_name == "fetch_url":
+        urls += [output.get("url"), output.get("final_url")]
+    return [u for u in urls if isinstance(u, str)]
 
 
 def _web(ctx: ToolContext) -> WebSection:
@@ -235,20 +236,26 @@ class OpenInput(BaseModel):
         return _normalized(v)
 
 
-_LOCAL_NAMES = re.compile(r"(^|\.)(localhost|local|lan|home|internal|intranet|home\.arpa)$")
+_LOCAL_NAMES = re.compile(r"(^|\.)(localhost|local|lan|home|internal|intranet|home\.arpa|localdomain|box|router|corp)$")
 
 
-def _open_url_note(args: OpenInput) -> str | None:
-    host = host_label(args.url)
+async def _open_url_note(args: OpenInput) -> str | None:
+    """Warn on the approval card when the link leads into the local network: by name, by address, or
+    because the name resolves to a private address (e.g. 192.168.1.1.nip.io). Checked on the
+    coordinator, which is normally on the same network as the browser."""
+    host = host_label(args.url).strip("[]")
+    note = f"This link points to a device on your own network or this computer ({host})."
     try:
-        ip = ipaddress.ip_address(host.strip("[]"))
+        ip = ipaddress.ip_address(host)
     except ValueError:
-        local = bool(_LOCAL_NAMES.search(host)) or "." not in host
-    else:
-        local = not ip.is_global
-    if local:
-        return f"This link points to a device on your own network or this computer ({host})."
-    return None
+        if _LOCAL_NAMES.search(host) or "." not in host:
+            return note
+        try:
+            addresses = await asyncio.wait_for(system_resolver(host, 443), 3)
+        except (TimeoutError, FetchError, OSError):
+            return None
+        return note if any(not is_public_address(a) for a in addresses) else None
+    return None if is_public_address(str(ip)) else note
 
 
 async def _open_url(ctx: ToolContext, args: OpenInput) -> dict[str, Any]:

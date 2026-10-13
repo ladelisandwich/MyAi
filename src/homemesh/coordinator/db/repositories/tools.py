@@ -23,18 +23,18 @@ class ToolRepo(Repo):
 
     async def create_approval(self, *, user_id: str | None, tool_name: str, arguments: dict[str, Any],
                               node_id: str | None, conversation_id: str | None, message_id: str | None,
-                              side_effect: str, expires_at: str) -> Row:
+                              side_effect: str, expires_at: str, details: dict[str, Any] | None = None) -> Row:
         aid = new_id("appr")
         await self.db.execute(
             "INSERT INTO tool_approvals(id, user_id, tool_name, arguments_json, node_id, conversation_id, message_id,"
-            " side_effect, status, requested_at, expires_at) VALUES (?,?,?,?,?,?,?,?,'pending',?,?)",
+            " side_effect, status, requested_at, expires_at, details_json) VALUES (?,?,?,?,?,?,?,?,'pending',?,?,?)",
             (aid, user_id, tool_name, jdump(arguments), node_id, conversation_id, message_id, side_effect, now_iso(),
-             expires_at))
+             expires_at, jdump(details)))
         return await self.get_approval(aid)  # type: ignore[return-value]
 
     async def get_approval(self, approval_id: str) -> Row | None:
         return decode(await self.db.fetchone("SELECT * FROM tool_approvals WHERE id=?", (approval_id,)),
-                      arguments_json={})
+                      arguments_json={}, details_json={})
 
     async def decide(self, approval_id: str, approved: bool, decided_by: str, reason: str | None = None) -> bool:
         n = await self.db.execute(
@@ -57,7 +57,7 @@ class ToolRepo(Repo):
                                           " LIMIT ?", (status, limit))
         else:
             rows = await self.db.fetchall("SELECT * FROM tool_approvals ORDER BY requested_at DESC LIMIT ?", (limit,))
-        return [decode(r, arguments_json={}) for r in rows]  # type: ignore[misc]
+        return [decode(r, arguments_json={}, details_json={}) for r in rows]  # type: ignore[misc]
 
     async def start_execution(self, *, approval_id: str | None, user_id: str | None, tool_name: str,
                               arguments: dict[str, Any], node_id: str | None, conversation_id: str | None,
@@ -80,12 +80,19 @@ class ToolRepo(Repo):
         return [decode(r, arguments_json={}, result_json=None) for r in rows]  # type: ignore[misc]
 
     async def results_in_conversation(self, conversation_id: str, tool_names: list[str],
-                                      limit: int = 200) -> list[Any]:
-        """Outputs of successful calls of these tools in one conversation, newest first."""
+                                      limit: int = 200) -> list[tuple[str, Any]]:
+        """(tool name, output) of successful calls of these tools in one conversation, newest first."""
         if not tool_names:
             return []
         marks = ",".join("?" * len(tool_names))
         rows = await self.db.fetchall(
-            f"SELECT result_json FROM tool_executions WHERE conversation_id=? AND tool_name IN ({marks})"
+            f"SELECT tool_name, result_json FROM tool_executions WHERE conversation_id=? AND tool_name IN ({marks})"
             " AND status='succeeded' ORDER BY started_at DESC LIMIT ?", (conversation_id, *tool_names, limit))
-        return [decode(r, result_json=None)["result_json"] for r in rows]  # type: ignore[index]
+        return [(r["tool_name"], decode(r, result_json=None)["result_json"]) for r in rows]  # type: ignore[index]
+
+    async def runs_in_message(self, message_id: str, tool_name: str) -> list[Row]:
+        """Calls of one tool made while generating one answer (arguments and whether approved)."""
+        rows = await self.db.fetchall(
+            "SELECT arguments_json, approval_id, status FROM tool_executions WHERE message_id=? AND tool_name=?"
+            " ORDER BY started_at", (message_id, tool_name))
+        return [decode(r, arguments_json={}) for r in rows]  # type: ignore[misc]
