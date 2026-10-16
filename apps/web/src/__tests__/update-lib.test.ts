@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import type { NodeSummary } from "../api/types";
 import {
   ACTIVE_ROW_STATES, DISMISS_AFTER_S, FINAL_STATUSES, HUB_UPDATE_KEY, NO_WORD_AFTER_S, PHASES, PHASE_LABELS, RESTART_PHASES,
   RUN_ID_PATTERN, SHA_PATTERN, SUCCESS_STATUSES, ago, canCheck, clearHubUpdate, formatElapsed, hubUpdateRecord, installerCommand,
@@ -162,12 +163,20 @@ describe("panelState", () => {
     expect(st(node({ online: false, update: r }))).toMatchObject({ startedAt: r.requested_at });
   });
 
-  it("says 'no word' only for an offline computer silent for 10 minutes; Dismiss after 15", () => {
-    const silent = (ms: number, online = false) => st(node({ online, update: row({ phase: "verifying", last_report_at: iso(ms) }) }));
+  it("says 'no word' when this run wasn't heard of for 10 minutes; Dismiss after 15 (the hub's dismiss rule)", () => {
+    const silent = (ms: number, over: Partial<NodeSummary> = { online: false }) =>
+      st(node({ ...over, update: row({ phase: "verifying", last_report_at: iso(ms) }) }));
     expect(silent(9 * MIN).kind).toBe("active");
     expect(silent(11 * MIN)).toMatchObject({ kind: "no_word", minutes: 11, canDismiss: false });
     expect(silent(16 * MIN)).toMatchObject({ kind: "no_word", minutes: 16, canDismiss: true });
-    expect(silent(30 * MIN, true).kind).toBe("active"); // a long build while connected is not silence
+    // Connected and reporting this run: a long build is not silence, however old the last change is.
+    expect(silent(30 * MIN, { online: true, update_live: report({ phase: "building" }) }).kind).toBe("active");
+    // Connected but reporting no run, or another one (a local run started right after; a report the hub can't
+    // read): the hub allows Dismiss here too, and without it the one active update blocks the whole mesh.
+    expect(silent(16 * MIN, { online: true, update_live: null })).toMatchObject({ kind: "no_word", minutes: 16, canDismiss: true });
+    const other = report({ job_id: null, origin: "local", run_id: "u20261016115900-0a1b2c3e", phase: "cleanup", status: "ok" });
+    expect(silent(16 * MIN, { online: true, update_live: other })).toMatchObject({ kind: "no_word", canDismiss: true });
+    expect(silent(5 * MIN, { online: true, update_live: other }).kind).toBe("active");
   });
 
   it("shows a local run reported live, but not a finished one", () => {

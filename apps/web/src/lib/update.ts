@@ -191,7 +191,7 @@ export function shortDate(ts: string | null | undefined, now: number = Date.now(
 export type PanelState =
   /** A remote update (or one started on that computer) is running. */
   | { kind: "active"; step: "ready" | "draining" | "restarting" | "other"; phase: string | null; startedAt: string | null; local: boolean }
-  /** Active, the computer is offline and nothing was heard for NO_WORD_AFTER_S. */
+  /** Active, and nothing was heard of this run for NO_WORD_AFTER_S (offline, or online but not reporting it). */
   | { kind: "no_word"; minutes: number; canDismiss: boolean }
   | { kind: "protocol" }
   | { kind: "no_updater" }
@@ -219,9 +219,14 @@ export function panelState(n: NodeSummary, now: number, { checking = false } = {
   const act = activeUpdate(n);
   if (act) {
     const live = n.update_live && n.update_live.job_id === act.id ? n.update_live : null;
+    // The hub's Dismiss rule (update_service.dismiss): a connected computer reporting this run right now is
+    // never silent, however long a phase takes. Otherwise silence counts from the last report (or the
+    // request) whether or not the computer is connected: one that is online but reports no run, or another
+    // run, would leave this update active (and every Update button disabled) with nothing to click.
+    const reporting = n.online && live != null && live.status == null;
     const last = parseTime(act.last_report_at) ?? parseTime(act.requested_at);
-    const silentS = last == null ? 0 : (now - last) / 1000;
-    if (!n.online && silentS >= NO_WORD_AFTER_S) {
+    const silentS = reporting || last == null ? 0 : Math.max(0, (now - last) / 1000);
+    if (silentS >= NO_WORD_AFTER_S) {
       return { kind: "no_word", minutes: Math.floor(silentS / 60), canDismiss: silentS >= DISMISS_AFTER_S };
     }
     const phase = act.phase ?? live?.phase ?? null;

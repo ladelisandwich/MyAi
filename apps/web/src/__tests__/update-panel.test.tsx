@@ -195,8 +195,18 @@ describe("card states (spec 14 table)", () => {
     expect(late.onDismiss).toHaveBeenCalledOnce();
   });
 
-  it("hides nothing when only the hub is slow: a connected computer is never 'no word'", () => {
-    expect(panel(node({ update: row({ phase: "building", last_report_at: iso(25 * MIN) }) })).text()).toBe("Getting ready on gaming-pc…");
+  it("a connected computer reporting this run is never 'no word', however long a phase takes", () => {
+    expect(panel(node({ update: row({ phase: "building", last_report_at: iso(25 * MIN) }), update_live: report({ phase: "building" }) })).text())
+      .toBe("Getting ready on gaming-pc…");
+  });
+
+  it("a connected computer that doesn't report this run gets 'no word' and Dismiss, as the hub allows", () => {
+    // E.g. a local `homemesh update` started right after the remote run ended, before its final report reached the hub.
+    const p = panel(node({ update: row({ phase: "building", last_report_at: iso(16 * MIN) }),
+      update_live: report({ job_id: null, origin: "local", run_id: "u20261016115900-0a1b2c3e", status: "ok", phase: "cleanup" }) }));
+    expect(p.text()).toBe("No word from gaming-pc for 16 min. It may still be working. On it, run:");
+    fireEvent.click(within(p.box).getByRole("button", { name: "Dismiss" }));
+    expect(p.onDismiss).toHaveBeenCalledOnce();
   });
 
   it("ok / ok_unconfirmed", () => {
