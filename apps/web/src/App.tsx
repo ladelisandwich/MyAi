@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, onUnauthorized } from "./api/client";
 import type { AuthStatus, User } from "./api/types";
 import { ErrorAlert, Spinner, ToastProvider } from "./components/ui";
+import { StoredHubUpdateNotice } from "./components/UpdatePanel";
 import { EventsProvider, useEvents } from "./lib/events";
 import { navigate, useRoute } from "./lib/router";
 import ChatPage from "./pages/Chat";
@@ -106,6 +107,8 @@ export default function App() {
       <div className="auth-wrap"><div className="card auth-card stack">
         <div className="brand"><img src="/icons/icon.svg" alt="" />HomeMesh AI</div>
         <ErrorAlert error={error} />
+        {/* The hub may be restarting for its own update: show the help saved before it went down. */}
+        <StoredHubUpdateNotice />
         <button className="btn primary" onClick={() => void refresh()}>Try again</button>
       </div></div>
     );

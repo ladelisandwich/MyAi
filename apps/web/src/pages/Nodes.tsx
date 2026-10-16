@@ -1,9 +1,13 @@
-import { useEffect, useState } from "react";
-import { api } from "../api/client";
-import type { GPUInfo, NodeSummary } from "../api/types";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { api, updatesApi } from "../api/client";
+import type { GPUInfo, NodeSummary, UpdateCheckResult } from "../api/types";
 import { Badge, ConfirmButton, CopyButton, Empty, ErrorAlert, Meter, Modal, Spinner, StatusDot, useLoad, useToast } from "../components/ui";
+import { HubUpdateNotice, UpdateDialog, UpdatePanel, useHubUpdateWatch } from "../components/UpdatePanel";
 import { useLiveRefresh } from "../lib/events";
 import { mb, relTime } from "../lib/format";
+import {
+  type HubUpdateRecord, canCheck, clearHubUpdate, isUpdating, readHubUpdate, reconcileHubUpdate, updatableCheck, writeHubUpdate,
+} from "../lib/update";
 
 const MODES = [
   { value: "performance", label: "Performance", hint: "Prioritise AI work" },
@@ -82,7 +86,16 @@ function GpuView({ g, live }: { g: GPUInfo; live?: { utilization_percent?: numbe
   );
 }
 
-function NodeCard({ n, reload }: { n: NodeSummary; reload: () => void }) {
+interface UpdateHooks {
+  busyElsewhere: string | null;
+  checking: boolean;
+  requestError: unknown;
+  onCheck: () => void;
+  onUpdate: () => void;
+  onDismiss: () => void;
+}
+
+function NodeCard({ n, reload, updates }: { n: NodeSummary; reload: () => void; updates: UpdateHooks }) {
   const toast = useToast();
   const [renaming, setRenaming] = useState(false);
   const hw = n.hardware;
@@ -104,14 +117,14 @@ function NodeCard({ n, reload }: { n: NodeSummary; reload: () => void }) {
         <span className="spacer" />
         <span className="faint small">{n.online ? `heartbeat ${n.heartbeat_age_s ?? "?"}s ago` : `last seen ${relTime(n.last_seen_at)}`}</span>
       </div>
-      {!n.online && n.last_disconnect_reason && <div className="alert warn small">Disconnected: {n.last_disconnect_reason}</div>}
-      <div className="grid cols-2" style={{ gap: 12 }}>
+      {!n.online && n.last_disconnect_reason && !isUpdating(n) && <div className="alert warn small">Disconnected: {n.last_disconnect_reason}</div>}
+      <div className="grid cols-2" style={{ gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(min(320px, 100%), 1fr))" }}>
         <dl className="kv">
           <dt>System</dt><dd>{hw?.os.distro_name ?? n.os ?? "—"} {hw?.os.immutable && <Badge>immutable</Badge>} {hw?.os.in_container && <Badge>container</Badge>}</dd>
           <dt>Architecture</dt><dd>{n.arch ?? "—"}</dd>
           <dt>CPU</dt><dd>{hw?.cpu.model ?? "—"} {hw?.cpu.logical_cores ? `(${hw.cpu.physical_cores ?? "?"} cores / ${hw.cpu.logical_cores} threads)` : ""}</dd>
           <dt>RAM</dt><dd>{mb(hw?.memory.total_mb)} total{t?.ram_available_mb != null ? ` · ${mb(t.ram_available_mb)} free` : ""}</dd>
-          <dt>HomeMesh</dt><dd>{n.software_version ?? "—"} (protocol v{n.protocol_version ?? "?"})</dd>
+          <dt>HomeMesh</dt><dd><UpdatePanel node={n} {...updates} /></dd>
           <dt>Jobs</dt><dd>{n.running_jobs.length} running · max {n.limits?.max_concurrent_jobs ?? "?"} · CPU inference {n.limits?.allow_cpu_inference ? "allowed" : "off"}</dd>
           <dt>Accepts</dt><dd>{n.task_types.join(", ") || "—"}</dd>
           <dt>Folders</dt><dd>{n.allowed_roots.length ? n.allowed_roots.join(", ") : <span className="faint">none authorised</span>}</dd>
@@ -166,21 +179,108 @@ function NodeCard({ n, reload }: { n: NodeSummary; reload: () => void }) {
 }
 
 export default function NodesPage() {
-  const { data, error, loading, reload } = useLoad(() => api.get<NodeSummary[]>("/api/v1/nodes"));
+  // Each load gets a sequence number when it starts, so the hub-update help is only reconciled with a node
+  // list requested after it was saved (an older list doesn't know the new update yet).
+  const seq = useRef(0);
+  const { data, error, loading, reload } = useLoad(async () => {
+    const s = ++seq.current;
+    return { nodes: await api.get<NodeSummary[]>("/api/v1/nodes"), seq: s };
+  });
   const [pairOpen, setPairOpen] = useState(false);
+  const [checking, setChecking] = useState<ReadonlySet<string>>(new Set());
+  const [requestErrors, setRequestErrors] = useState<Record<string, unknown>>({});
+  const [dialog, setDialog] = useState<{ nodeId: string; result: UpdateCheckResult } | null>(null);
+  const [hubRecord, setHubRecord] = useState<HubUpdateRecord | null>(() => readHubUpdate());
+  const hubRecordSeq = useRef(0);
   useLiveRefresh(["node.connected", "node.disconnected", "node.updated", "node.models", "node.enrolled", "node.revoked"], reload, 300);
   useLiveRefresh(["node.telemetry"], reload, 3000);
+  const hubDown = useHubUpdateWatch(!!hubRecord);
+
+  // The hub's card comes first.
+  const nodes = useMemo(() => [...(data?.nodes ?? [])].sort((a, b) => Number(b.embedded) - Number(a.embedded)), [data]);
+  const hub = nodes.find((x) => x.embedded) ?? null;
+  const busy = nodes.find((x) => isUpdating(x)) ?? null;
+
+  const onHubRecord = useCallback((rec: HubUpdateRecord | null) => {
+    hubRecordSeq.current = seq.current;
+    setHubRecord(rec);
+  }, []);
+
+  useEffect(() => {
+    if (!hubRecord || !data || error || data.seq <= hubRecordSeq.current) return;
+    const r = reconcileHubUpdate(hubRecord, data.nodes);
+    if (r.action === "clear") {
+      clearHubUpdate();
+      setHubRecord(null);
+    } else if (r.action === "update") {
+      writeHubUpdate(r.record);
+      setHubRecord(r.record);
+    }
+  }, [data, error, hubRecord]);
+
+  const check = async (ids: string[]) => {
+    if (!ids.length) return;
+    setChecking((cur) => new Set([...cur, ...ids]));
+    setRequestErrors((cur) => {
+      const next = { ...cur };
+      ids.forEach((id) => delete next[id]);
+      return next;
+    });
+    await Promise.all(ids.map(async (id) => {
+      try {
+        await updatesApi.check(id);
+      } catch (e) {
+        setRequestErrors((cur) => ({ ...cur, [id]: e }));
+      }
+    }));
+    // From here the node list's update_check_pending says whether each check still runs.
+    await reload();
+    setChecking((cur) => new Set([...cur].filter((id) => !ids.includes(id))));
+  };
+
+  const dismiss = async (id: string) => {
+    try {
+      await updatesApi.dismiss(id);
+      setRequestErrors((cur) => ({ ...cur, [id]: null }));
+    } catch (e) {
+      setRequestErrors((cur) => ({ ...cur, [id]: e }));
+    }
+    await reload();
+  };
+
+  const checkable = nodes.filter((x) => canCheck(x, { checking: checking.has(x.id) }));
+  const dialogNode = dialog ? nodes.find((x) => x.id === dialog.nodeId) ?? null : null;
+
   return (
     <div className="page">
       <div className="page-header">
         <h1>Computers</h1><span className="spacer" />
+        <button className="btn" onClick={() => void check(checkable.map((x) => x.id))} disabled={!checkable.length}
+          title="Ask every online computer whether its branch has new commits">Check for updates</button>
         <button className="btn primary" onClick={() => setPairOpen(true)}>＋ Add a computer</button>
       </div>
       <p className="muted small">Every computer running a HomeMesh worker contributes what it has: a GPU for chat, a CPU for embeddings or document indexing. Workers connect out to the coordinator, so they need no open ports.</p>
+      {hubRecord && <HubUpdateNotice record={hubRecord} down={hubDown} onHide={() => { clearHubUpdate(); onHubRecord(null); }} />}
       <ErrorAlert error={error} />
-      {loading && !data ? <Spinner /> : data?.length === 0 ? <Empty icon="🖥️" title="No computers yet">Start HomeMesh in standalone mode or add a worker.</Empty>
-        : data?.map((n) => <NodeCard key={n.id} n={n} reload={() => void reload()} />)}
+      {loading && !data ? <Spinner /> : nodes.length === 0 && !error ? <Empty icon="🖥️" title="No computers yet">Start HomeMesh in standalone mode or add a worker.</Empty>
+        : nodes.map((n) => (
+          <NodeCard key={n.id} n={n} reload={() => void reload()} updates={{
+            busyElsewhere: busy && busy.id !== n.id ? busy.name : null,
+            checking: checking.has(n.id),
+            requestError: requestErrors[n.id],
+            onCheck: () => void check([n.id]),
+            onUpdate: () => {
+              const result = updatableCheck(n);
+              if (result) setDialog({ nodeId: n.id, result });
+            },
+            onDismiss: () => void dismiss(n.id),
+          }} />
+        ))}
       {pairOpen && <PairDialog onClose={() => { setPairOpen(false); void reload(); }} />}
+      {dialog && dialogNode && (
+        <UpdateDialog node={dialogNode} result={dialog.result} hub={hub} onClose={() => setDialog(null)}
+          onDone={() => { setDialog(null); void reload(); }} onHubRecord={onHubRecord} />
+      )}
     </div>
   );
 }
