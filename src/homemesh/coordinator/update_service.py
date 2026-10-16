@@ -55,8 +55,6 @@ log = get_logger(__name__)
 # reports decide (or "not started" once the computer reports something else, see _maybe_not_started).
 UNKNOWN_OUTCOME_CODES = frozenset({"worker_disconnected", "timeout", "coordinator_restarted", "worker_unresponsive",
                                    "cancelled"})
-# Of those, the ones where the computer is still connected and simply never answered.
-_NO_ANSWER_CODES = frozenset({"timeout", "worker_unresponsive"})
 
 CHECK_UNREADABLE = "update_check_unreadable"  # coordinator-only: a check result this version can't parse
 NO_UPDATER_REASON = "it runs a HomeMesh version without the updater"
@@ -333,10 +331,12 @@ class UpdateService:
         node_id = row["node_id"]
         code = info.get("error_code") or ""
         if code in UNKNOWN_OUTCOME_CODES or info.get("status") in ("cancelled", "interrupted"):
-            # The runner may have started; its reports decide. If the computer is connected and simply never
-            # answered, what it reports right now tells whether this run exists.
+            # The runner may have started; its reports decide. If the computer is connected right now (it never
+            # answered, or it already reconnected: its new hello can be handled before the old connection's
+            # drop ends this job), what it reports now tells whether this run exists. Waiting for the next
+            # report instead would wait forever: unchanged heartbeat reports are not handled again.
             conn = self.nodes.get(node_id)
-            if code in _NO_ANSWER_CODES and conn is not None:
+            if conn is not None:
                 await self._maybe_not_started(node_id, conn.update_live, unreadable=conn.update_unreadable)
             return
         # Refused before the runner was launched (update_* codes), never sent (dispatch_failed), or rejected.

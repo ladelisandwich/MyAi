@@ -654,6 +654,18 @@ async def test_not_started_when_the_computer_reconnects_without_this_run(env):
     assert row["state"] == "running" and row["active"]
 
 
+async def test_not_started_when_the_new_hello_is_handled_before_the_old_connection_drops(env):
+    """A quick reconnect: the new connection's hello (no run) is handled while the apply job is still running,
+    and only then the old connection's drop ends the job. Unchanged heartbeat reports are never handled again,
+    so the job ending itself must conclude it, or the row would wait for Dismiss."""
+    node_id = await add_node(env, "pc", b=build(), checked=check_result())
+    update_id = await apply_job(env, node_id)
+    await env.updates.on_update_report(node_id, None, hello=True)  # the new hello
+    assert (await env.repos.updates.get(update_id))["state"] == "requested"  # job still running: unknown yet
+    await env.jobs.on_node_disconnected(node_id, "disconnected (code 1006)")  # the old connection's drop
+    assert (await env.repos.updates.get(update_id))["state"] == "not_started"
+
+
 async def test_not_started_when_reporting_another_run_after_a_timeout(env):
     node_id = await add_node(env, "pc", b=build(), checked=check_result())
     update_id = await apply_job(env, node_id)
@@ -668,8 +680,14 @@ async def test_not_started_when_reporting_another_run_after_a_timeout(env):
 async def test_unreadable_report_never_concludes_not_started(env):
     node_id = await add_node(env, "pc", b=build(), checked=check_result())
     update_id = await apply_job(env, node_id)
+    env.nodes.connections.pop(node_id)  # _drop removes the connection before the job is ended
     await env.jobs.on_node_disconnected(node_id, "gone")
+    conn = await add_node_connection(env, node_id, "pc")  # back, with a report this version can't read
+    conn.update_unreadable = True
     await env.updates.on_update_report(node_id, None, hello=True, unreadable=True)
+    assert (await env.repos.updates.get(update_id))["state"] == "requested"
+    # nor does a job ending while it is connected like that
+    await env.updates._apply_failed({"id": update_id}, {"status": "failed", "error_code": "timeout"})
     assert (await env.repos.updates.get(update_id))["state"] == "requested"
 
 
