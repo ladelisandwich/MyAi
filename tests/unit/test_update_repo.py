@@ -2,10 +2,12 @@
 coordinator's guesses."""
 
 import asyncio
+import contextlib
 import sqlite3
 
 import pytest
 
+from homemesh.coordinator.db import migrate as migrations
 from homemesh.coordinator.db.database import Database
 from homemesh.coordinator.db.migrate import migrate
 from homemesh.coordinator.db.repositories import Repositories
@@ -108,9 +110,10 @@ async def test_late_report_overwrites_abandoned_and_not_started(repos):
     row = await repos.updates.get("job_a")
     assert row["state"] == "abandoned" and row["error_code"] == "update_abandoned" and not row["active"]
     assert not await repos.updates.abandon("job_a", error="again", hint=None)
-    assert await repos.updates.update_from_report("job_a", phase="verifying", report={"p": 1})
-    assert (await repos.updates.get("job_a"))["state"] == "abandoned"  # progress alone doesn't reactivate
     await _create(repos, "job_b", n["id"])  # the mesh is free again
+    # progress for the abandoned row while another update is active: ignored (one active update)
+    assert not await repos.updates.update_from_report("job_a", phase="verifying", report={"p": 1})
+    assert (await repos.updates.get("job_a"))["state"] == "abandoned"
     assert await repos.updates.finish("job_a", state="rolled_back", error_code="update_new_version_crashed",
                                       error="crashed", hint="undone", report={"status": "rolled_back"})
     row = await repos.updates.get("job_a")
@@ -125,6 +128,93 @@ async def test_late_report_overwrites_abandoned_and_not_started(repos):
         await repos.updates.finish("job_b", state="running")
     with pytest.raises(ValueError):
         await repos.updates.finish("job_b", state="abandoned")
+
+
+async def test_progress_after_a_guess_makes_the_row_active_again(repos):
+    # Dismissed after 15 min without word (the computer slept); then the runner reports again.
+    n = await repos.nodes.create("pc")
+    await _create(repos, "job_a", n["id"])
+    assert await repos.updates.abandon("job_a", error="Outcome unknown.", hint="h")
+    report = {"run_id": RUN_ID, "job_id": "job_a", "phase": "verifying", "status": None}
+    assert await repos.updates.update_from_report("job_a", phase="verifying", report=report)
+    row = await repos.updates.get("job_a")
+    assert (row["state"], row["active"], row["phase"], row["run_id"]) == ("running", True, "verifying", RUN_ID)
+    assert row["error_code"] is None and row["finished_at"] is None
+    with pytest.raises(ActiveUpdateExists):  # it is the mesh's active update again
+        await _create(repos, "job_b", n["id"])
+    assert await repos.updates.finish("job_a", state="ok", report={**report, "status": "ok"}, phase="cleanup")
+    assert (await repos.updates.get("job_a"))["state"] == "ok"
+
+
+async def test_launch_timeout_is_a_guess_that_the_runner_can_correct(repos):
+    # The worker gave up waiting for run.json (15 s, e.g. a slow first Python start) and sent
+    # JobFailed(update_launch_failed), but the runner did start: its reports carry the row's job id.
+    n = await repos.nodes.create("pc")
+    await _create(repos, "job_a", n["id"])
+    assert await repos.updates.finish("job_a", state="failed", error_code="update_launch_failed",
+                                      error="The update helper could not be started: timeout.", hint="See log")
+    row = await repos.updates.get("job_a")
+    assert (row["state"], row["active"], row["run_id"]) == ("failed", False, None)
+    report = {"run_id": RUN_ID, "job_id": "job_a", "phase": "building", "status": None}
+    assert await repos.updates.update_from_report("job_a", phase="building", report=report)
+    assert (await repos.updates.get("job_a"))["state"] == "running"
+    final = {**report, "phase": "cleanup", "status": "ok"}
+    assert await repos.updates.finish("job_a", state="ok", report=final, phase="cleanup")
+    row = await repos.updates.get("job_a")
+    assert (row["state"], row["run_id"], row["error_code"]) == ("ok", RUN_ID, None)
+
+    # final report straight after the guess, no progress in between
+    await _create(repos, "job_b", n["id"])
+    assert await repos.updates.finish("job_b", state="failed", error_code="update_launch_failed")
+    assert await repos.updates.finish("job_b", state="rolled_back", error_code="update_not_confirmed",
+                                      report={**final, "job_id": "job_b", "status": "rolled_back"})
+    row = await repos.updates.get("job_b")
+    assert (row["state"], row["error_code"], row["run_id"]) == ("rolled_back", "update_not_confirmed", RUN_ID)
+    # a real outcome is final, also for "failed" that came with a report
+    assert not await repos.updates.finish("job_b", state="ok", report=final)
+
+
+async def test_job_failure_after_the_runner_reported_is_ignored(repos):
+    # The report arrived first; a JobFailed for the same job must not end a run that is going on.
+    n = await repos.nodes.create("pc")
+    await _create(repos, "job_a", n["id"])
+    assert await repos.updates.update_from_report("job_a", phase="accepted", report={"run_id": RUN_ID})
+    assert not await repos.updates.finish("job_a", state="failed", error_code="update_launch_failed")
+    row = await repos.updates.get("job_a")
+    assert (row["state"], row["active"], row["run_id"]) == ("running", True, RUN_ID)
+
+
+async def test_migration_0004_upgrades_a_populated_0_2_0_database(tmp_path, monkeypatch):
+    path = tmp_path / "hm.sqlite3"
+    every = migrations.load_migrations()
+    assert [m.version for m in every][-1] == 4 and every[3].name == "updates"
+    with contextlib.closing(sqlite3.connect(path, isolation_level=None)) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        monkeypatch.setattr(migrations, "load_migrations", lambda: every[:3])  # what 0.2.0 shipped
+        assert migrate(conn) == [1, 2, 3]
+        monkeypatch.undo()
+        t = "2026-10-13T12:00:00.000Z"
+        conn.execute("INSERT INTO nodes(id, name, created_at, updated_at, connected, hardware_json)"
+                     " VALUES ('node_1', 'pc', ?, ?, 1, '{\"cpu\": 8}')", (t, t))
+        conn.execute("INSERT INTO users(id, username, password_hash, role, created_at, updated_at)"
+                     " VALUES ('usr_1', 'me', 'h', 'owner', ?, ?)", (t, t))
+        assert migrate(conn, tmp_path / "backups") == [4]
+        assert [p.name.startswith("pre-migration-v3-to-v4-") for p in (tmp_path / "backups").iterdir()] == [True]
+        assert conn.execute("SELECT name, hardware_json, build_json, update_check_json FROM nodes").fetchall() == \
+            [("pc", '{"cpu": 8}', None, None)]
+        indexes = {r[0]: r[1] for r in conn.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='node_updates'")}
+        assert "WHERE active IS NOT NULL" in indexes["node_updates_one_active"] and "node_updates_by_node" in indexes
+        conn.execute("INSERT INTO node_updates(id, node_id, requested_at, expected_commit, state, active)"
+                     " VALUES ('job_1', 'node_1', ?, ?, 'requested', 1)", (t, SHA))
+        with pytest.raises(sqlite3.IntegrityError):  # foreign key
+            conn.execute("INSERT INTO node_updates(id, node_id, requested_at, expected_commit, state)"
+                         " VALUES ('job_2', 'node_x', ?, ?, 'failed')", (t, SHA))
+        conn.execute("DELETE FROM nodes WHERE id='node_1'")
+        assert conn.execute("SELECT COUNT(*) FROM node_updates").fetchone() == (0,)  # cascade
+        assert conn.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+        assert migrate(conn) == []
 
 
 async def test_latest_per_node_and_history(repos):

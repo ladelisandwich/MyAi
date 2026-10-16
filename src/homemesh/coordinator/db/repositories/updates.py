@@ -6,7 +6,13 @@ checks and inserts inside one ``BEGIN IMMEDIATE`` transaction, and the partial u
 
 States: ``requested`` → ``running`` → a final run status (``ok``, ``ok_unconfirmed``, ``already_up_to_date``,
 ``rolled_back``, ``failed``, ``interrupted``), or the coordinator's own ``not_started`` / ``abandoned``.
-Those two are guesses: a report that arrives later with the real outcome still overwrites them.
+
+**Guesses.** Three end states are the coordinator's verdict without word from the runner: ``not_started``,
+``abandoned``, and ``failed`` set from the apply job (``JobFailed`` / ``dispatch_failed``) before any report
+arrived (``report_json`` is NULL). The runner may still be alive (an accept timeout, a computer that slept),
+so a report carrying the row's job id overrides a guess: a final report sets the real outcome, a progress
+report makes the row active again when no other update is active (otherwise it is ignored until the final
+report). A row that holds a real outcome is never changed (hello repeats the last report on every reconnect).
 """
 
 from __future__ import annotations
@@ -19,8 +25,19 @@ from homemesh.coordinator.db.database import Row
 from homemesh.coordinator.db.repositories.base import Repo, jdump, jload
 from homemesh.protocol.update import FINAL_STATUSES
 
-# Rows a report may still change: active ones, and the coordinator's guesses (a late report wins).
-_WRITABLE = "(active IS NOT NULL OR state IN ('abandoned', 'not_started'))"
+# The coordinator's own verdicts, which a report from the runner overrides (see the module docstring).
+_GUESS = "(state IN ('abandoned', 'not_started') OR (state = 'failed' AND report_json IS NULL))"
+# Rows a report may still change: active ones, and the guesses (a late report wins).
+_WRITABLE = f"(active IS NOT NULL OR {_GUESS})"
+
+
+def _is_guess(row: sqlite3.Row) -> bool:
+    return row["state"] in ("abandoned", "not_started") or (row["state"] == "failed" and row["report_json"] is None)
+
+
+def _report_run_id(report: dict[str, Any] | None) -> str | None:
+    run_id = report.get("run_id") if isinstance(report, dict) else None
+    return run_id if isinstance(run_id, str) else None
 
 
 class ActiveUpdateExists(Exception):
@@ -110,25 +127,58 @@ class UpdateRepo(Repo):
     async def update_from_report(self, update_id: str, *, phase: str, report: dict[str, Any],
                                  run_id: str | None = None, reported_at: str | None = None) -> bool:
         """A non-final report for this row (``report.job_id == update_id``): store phase, report and the
-        coordinator's receive time; ``requested`` becomes ``running``. Final reports go to :meth:`finish`."""
-        n = await self.db.execute(
-            "UPDATE node_updates SET phase=?, report_json=?, last_report_at=?, run_id=COALESCE(run_id, ?),"
-            " state=CASE WHEN state='requested' THEN 'running' ELSE state END WHERE id=? AND " + _WRITABLE,
-            (phase, jdump(report), reported_at or now_iso(), run_id, update_id))
-        return n == 1
+        coordinator's receive time; ``requested`` becomes ``running``. Final reports go to :meth:`finish`.
+
+        On a guess (``not_started``, ``abandoned``, ``failed`` without a report) the runner is evidently
+        alive: the row becomes ``running`` and active again, unless another update is active in the mesh
+        (then nothing changes and False is returned; the final report still lands). ``run_id`` defaults to
+        ``report["run_id"]``. Returns True if the row changed."""
+        at = reported_at or now_iso()
+        rid = run_id or _report_run_id(report)
+        data = jdump(report)
+
+        def _tx(conn: sqlite3.Connection) -> bool:
+            row = conn.execute("SELECT state, active, report_json FROM node_updates WHERE id=?",
+                               (update_id,)).fetchone()
+            if row is None:
+                return False
+            if row["active"] is not None:
+                conn.execute(
+                    "UPDATE node_updates SET phase=?, report_json=?, last_report_at=?, run_id=COALESCE(run_id, ?),"
+                    " state=CASE WHEN state='requested' THEN 'running' ELSE state END WHERE id=?",
+                    (phase, data, at, rid, update_id))
+                return True
+            if not _is_guess(row):
+                return False
+            if conn.execute("SELECT 1 FROM node_updates WHERE active IS NOT NULL LIMIT 1").fetchone():
+                return False
+            conn.execute(
+                "UPDATE node_updates SET state='running', active=1, finished_at=NULL, error_code=NULL, error=NULL,"
+                " hint=NULL, phase=?, report_json=?, last_report_at=?, run_id=COALESCE(run_id, ?) WHERE id=?",
+                (phase, data, at, rid, update_id))
+            return True
+
+        return await self.db.transaction(_tx)
 
     async def finish(self, update_id: str, *, state: str, error_code: str | None = None, error: str | None = None,
                      hint: str | None = None, report: dict[str, Any] | None = None, phase: str | None = None,
                      run_id: str | None = None, finished_at: str | None = None) -> bool:
-        """End a row: a final run status from a report (pass ``report`` and ``phase``), ``failed`` for an
-        apply refused before launch (``update_*`` code), or ``not_started``. Clears ``active``.
+        """End a row. Clears ``active``. Returns True if the row changed. Three uses:
 
-        A real outcome (any final run status) also overwrites ``abandoned`` / ``not_started``; ``not_started``
-        only ends an active row. Rows that already hold a real outcome are left alone (hello repeats the
-        last report on every reconnect). Returns True if the row changed.
+        * a **final report** from the runner: ``state`` = its status, with ``report`` and ``phase`` (and
+          ``run_id``, default ``report["run_id"]``). Overwrites an active row or a guess (see the module
+          docstring); a row that already holds a real outcome is left alone (hello repeats the last report
+          on every reconnect).
+        * ``state="failed"`` **without** ``report``: the apply job failed before the runner was heard from
+          (``JobFailed`` with an ``update_*`` code, ``dispatch_failed``). Applies only to an active row that
+          has no report yet; once the runner reported, its reports decide (returns False). The row is a
+          guess afterwards: a report for it still wins.
+        * ``state="not_started"``: only ends an active row.
         """
         if state == "not_started":
             where = "active IS NOT NULL"
+        elif state == "failed" and report is None:
+            where = "active IS NOT NULL AND report_json IS NULL"
         elif state in FINAL_STATUSES:
             where = _WRITABLE
         else:
@@ -136,7 +186,7 @@ class UpdateRepo(Repo):
         now = finished_at or now_iso()
         sets = ["state=?", "active=NULL", "finished_at=?", "error_code=?", "error=?", "hint=?",
                 "run_id=COALESCE(run_id, ?)"]
-        vals: list[Any] = [state, now, error_code, error, hint, run_id]
+        vals: list[Any] = [state, now, error_code, error, hint, run_id or _report_run_id(report)]
         if report is not None:
             sets += ["report_json=?", "last_report_at=?"]
             vals += [jdump(report), now_iso()]
