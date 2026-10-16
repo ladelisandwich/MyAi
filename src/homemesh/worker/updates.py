@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import threading
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
@@ -206,6 +207,24 @@ class UpdateManager:
                 message = f"{message}\n{tail[-room:]}"
         return UpdateIssue(code=code, message=message, hint=exc.hint)
 
+    async def _start_check(self, job_id: str) -> launch.RunnerHandle:
+        """Start the check runner (in a thread). Cancelled meanwhile (job cancel, disconnect, worker
+        stopping), the start still completes in its thread: the runner it started is then killed when it
+        does, instead of running on unseen for up to 5 minutes and holding the update lock."""
+        start = asyncio.ensure_future(asyncio.to_thread(launch.start_check, self.paths, self.cfg, origin="remote",
+                                                        job_id=job_id))
+        try:
+            return await asyncio.shield(start)
+        except asyncio.CancelledError:
+            def kill_when_started(fut: asyncio.Future[launch.RunnerHandle]) -> None:
+                if fut.cancelled() or fut.exception() is not None:
+                    return
+                threading.Thread(target=launch.kill_check, args=(fut.result(),), name="update-check-kill",
+                                 daemon=True).start()
+
+            start.add_done_callback(kill_when_started)
+            raise
+
     async def _kill_check(self, handle: launch.RunnerHandle) -> None:
         """Stop a check runner tree; finishes even if this task is cancelled again meanwhile."""
         kill = asyncio.ensure_future(asyncio.to_thread(launch.kill_check, handle))
@@ -222,8 +241,7 @@ class UpdateManager:
         self._last_check_launch = now
         try:
             try:
-                handle = await asyncio.to_thread(launch.start_check, self.paths, self.cfg, origin="remote",
-                                                 job_id=msg.job_id)
+                handle = await self._start_check(msg.job_id)
             except launch.UpdateLaunchError as exc:
                 raise UpdateRefused(self._launch_issue(exc)) from None
             try:

@@ -9,6 +9,8 @@ import contextlib
 import json
 import os
 import ssl
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -85,6 +87,7 @@ class FakeLaunch:
         self.accept_error: Exception | None = None
         self.accept_hangs = False
         self.start_error: Exception | None = None
+        self.start_gate: threading.Event | None = None  # start_check waits for it (a slow launch)
 
     def _handle(self, mode, run_id):
         return launch.RunnerHandle(mode=mode, run_id=run_id, method="posix", args_file=self.tmp / "a.json",
@@ -92,6 +95,8 @@ class FakeLaunch:
 
     def start_check(self, paths, cfg, *, origin, job_id=None, run_id=None, foreground=False):
         self.calls.append(("start_check", origin, job_id, foreground))
+        if self.start_gate is not None:
+            assert self.start_gate.wait(10)
         if self.start_error:
             raise self.start_error
         return self._handle("check", run_id or files.new_run_id())
@@ -292,6 +297,31 @@ async def test_cancelling_a_check_kills_the_runner(home, fake, monkeypatch):
     with contextlib.suppress(asyncio.CancelledError):
         await task
     assert isinstance(sent[-1], pm.JobCancelled) and len(fake.killed) == 1 and "job_x" not in mgr.jobs
+
+
+async def test_a_check_cancelled_while_its_runner_starts_still_kills_it(home, fake, monkeypatch):
+    """Cancel (job cancel, disconnect, worker stopping) can arrive while start_check runs in its thread;
+    the runner it starts must not be left running unseen."""
+    _updatable(monkeypatch)
+    consent.allow(home)
+    fake.start_gate = threading.Event()
+    mgr, sent = _manager(home)
+    await mgr.on_dispatch(pm.JobDispatch(job_id="job_s", job_type="update.check", priority="interactive",
+                                         payload={}, timeout_s=330))
+    task = mgr.jobs["job_s"]
+    for _ in range(200):
+        if fake.calls:
+            break
+        await asyncio.sleep(0.01)
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    assert isinstance(sent[-1], pm.JobCancelled) and fake.killed == []
+    fake.start_gate.set()  # the launch finishes after the job was cancelled
+    deadline = time.monotonic() + 5
+    while not fake.killed and time.monotonic() < deadline:
+        await asyncio.sleep(0.02)
+    assert len(fake.killed) == 1 and not any(c[0] == "wait_for_check" for c in fake.calls)
 
 
 # --------------------------------------------------------------------------- update.apply
