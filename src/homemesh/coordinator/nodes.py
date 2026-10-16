@@ -94,6 +94,7 @@ class NodeConnection:
     # Latest update run report from Hello.update / Heartbeat.update (local runs too); None = no run reported.
     update_live: UpdateRunReport | None = None
     update_unreadable: bool = False  # the worker sent a report this version can't parse
+    update_unhandled: bool = False  # handling the current report failed: handle it again with the next heartbeat
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     closed: bool = False
 
@@ -392,7 +393,7 @@ class NodeManager:
             self.bus.publish("node.telemetry", {"node_id": conn.node_id, "telemetry": msg.telemetry.model_dump(),
                                                 "running_jobs": msg.running_jobs, "mode": msg.mode})
             report, unreadable = self._read_report(conn, msg.update)
-            if report != conn.update_live or unreadable != conn.update_unreadable:
+            if report != conn.update_live or unreadable != conn.update_unreadable or conn.update_unhandled:
                 conn.update_live, conn.update_unreadable = report, unreadable
                 await self._report_update(conn, hello=False)
         elif isinstance(msg, pm.CapabilitiesUpdate):
@@ -459,7 +460,13 @@ class NodeManager:
         try:
             await self.on_update_report(conn.node_id, conn.update_live, hello=hello, unreadable=conn.update_unreadable)
         except Exception:
-            log.exception("Handling the update report of %s failed", conn.name)
+            # Heartbeats repeat the report; handle it again with the next one rather than lose its outcome
+            # until the computer reconnects.
+            conn.update_unhandled = True
+            log.exception("Handling the update report of %s failed; trying again with the next heartbeat",
+                          conn.name)
+        else:
+            conn.update_unhandled = False
 
     # ------------------------------------------------------------------ commands
     def get(self, node_id: str) -> NodeConnection | None:

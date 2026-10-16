@@ -633,6 +633,30 @@ async def test_unchanged_heartbeat_reports_are_not_reprocessed(env):
     assert (await env.repos.updates.get(update_id))["state"] == "running"
 
 
+async def test_a_report_whose_handling_failed_is_handled_again_with_the_next_heartbeat(env):
+    """Reports are handled only when they change; if handling one failed (a database error), the same report in
+    the next heartbeat is handled again instead of losing the outcome until the computer reconnects."""
+    node_id = await add_node(env, "pc", b=build(), checked=check_result())
+    update_id = await apply_job(env, node_id)
+    conn = env.nodes.connections[node_id]
+    original = env.nodes.on_update_report
+    failures = [RuntimeError("database is locked")]
+
+    async def flaky(*a: Any, **kw: Any) -> None:
+        if failures:
+            raise failures.pop()
+        await original(*a, **kw)
+
+    env.nodes.on_update_report = flaky
+    final = report(update_id, "cleanup", "ok").to_wire()
+    for seq in (1, 2):
+        await env.nodes._handle_message(conn, pm.Heartbeat(seq=seq, telemetry=Telemetry(), mode="balanced",
+                                                           update=final))
+    assert (await env.repos.updates.get(update_id))["state"] == "ok"
+    assert len(await audit(env, "node.update_finished")) == 1
+    assert not conn.update_unhandled
+
+
 # --------------------------------------------------------------------------- not started
 
 async def test_not_started_when_the_computer_reconnects_without_this_run(env):
