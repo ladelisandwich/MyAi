@@ -9,8 +9,8 @@ import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
 import { ApiError, checkHealth, updatesApi } from "../api/client";
 import type { BuildInfo, NodeSummary, NodeUpdate, UpdateCheckResult, UpdateIssue } from "../api/types";
 import {
-  HEALTH_POLL_MS, type HubUpdateRecord, type PanelState, canCheck, clearHubUpdate, formatElapsed, ago, hubUpdateRecord,
-  installerCommand, isBuildInfo, isCommand, isUpdating, nodeOs, panelState, parseTime, phaseLabel, readHubUpdate,
+  HEALTH_POLL_MS, type HubUpdateRecord, type PanelState, canCheck, clearHubUpdate, formatElapsed, ago, hubUpdateRecord, safeInstallerCommand,
+  isBuildInfo, isCommand, isUpdating, nodeOs, panelState, parseTime, phaseLabel, readHubUpdate,
   shortDate, shortSha, splitCode, updatableCheck, updateLogText, writeHubUpdate,
 } from "../lib/update";
 import { CopyButton, Modal, Spinner } from "./ui";
@@ -210,15 +210,15 @@ export function UpdatePanel({ node, busyElsewhere, checking = false, requestErro
       break;
     case "protocol":
       line = <>Can't connect: different HomeMesh version. Update it by hand:</>;
-      detail = <CommandBlock cmd={installerCommand(nodeOs(node), build?.source_dir, { pull: true })} />;
+      detail = <CommandBlock cmd={safeInstallerCommand(nodeOs(node), build?.source_dir, { pull: true })} />;
       break;
     case "no_updater":
       line = <>This version has no updater. Update it by hand once:</>;
-      detail = <CommandBlock cmd={installerCommand(nodeOs(node), null, { pull: true })} />;
+      detail = <CommandBlock cmd={safeInstallerCommand(nodeOs(node), null, { pull: true })} />;
       break;
     case "invalid_build":
       line = <>This computer reported its version in a form the hub can't read. Update it by hand:</>;
-      detail = <CommandBlock cmd={installerCommand(nodeOs(node), null, { pull: true })} />;
+      detail = <CommandBlock cmd={safeInstallerCommand(nodeOs(node), null, { pull: true })} />;
       break;
     case "checking":
       line = <Spinner label="Checking for updates…" />;
@@ -227,7 +227,7 @@ export function UpdatePanel({ node, busyElsewhere, checking = false, requestErro
       line = outcomeLine(s.update, node);
       detail = (
         <>
-          {s.update.error?.code === "update_rollback_failed" && build && <CommandBlock cmd={installerCommand(build.os, build.source_dir)} />}
+          {s.update.error?.code === "update_rollback_failed" && build && <CommandBlock cmd={safeInstallerCommand(build.os, build.source_dir)} />}
           {(s.update.state === "not_started" || s.update.state === "abandoned" || s.update.state === "failed" || s.update.state === "rolled_back") && s.update.log
             && <div className="faint tiny">Log on {name}: <span className="mono">{s.update.log}</span></div>}
           <Warnings items={s.update.warnings ?? []} />
@@ -239,7 +239,7 @@ export function UpdatePanel({ node, busyElsewhere, checking = false, requestErro
       break;
     case "cannot_update":
       line = <>Can't be updated remotely{s.reason ? <>: <RichText text={s.reason} /></> : ""}.{s.dev ? "" : " Update it by hand once:"}</>;
-      if (!s.dev) detail = <CommandBlock cmd={installerCommand(build?.os, build?.source_dir, { pull: true })} />;
+      if (!s.dev) detail = <CommandBlock cmd={safeInstallerCommand(build?.os, build?.source_dir, { pull: true })} />;
       break;
     case "not_allowed":
       line = <>Remote updates are off on this computer. On it, run:</>;
@@ -250,7 +250,7 @@ export function UpdatePanel({ node, busyElsewhere, checking = false, requestErro
         line = <RichText text={s.error.message} />; // the reason already says: update it with git pull
       } else if (NEEDS_INSTALLER.has(s.error.code)) {
         line = <><RichText text={s.error.message} /> Update it by hand once:</>;
-        detail = <CommandBlock cmd={installerCommand(build?.os, build?.source_dir, { pull: true })} />;
+        detail = <CommandBlock cmd={safeInstallerCommand(build?.os, build?.source_dir, { pull: true })} />;
       } else {
         line = <IssueText issue={s.error} />;
       }
@@ -314,7 +314,7 @@ export function RecoverySteps({ name, os, sourceDir, logsDir, runId }: { name: s
       <ol className="small">
         <li>On {name}, run:<CommandBlock cmd="homemesh update status" /></li>
         <li>If that fails, open <span className="mono break">{log}</span> and run the installer:
-          <CommandBlock cmd={installerCommand(os, sourceDir)} /></li>
+          <CommandBlock cmd={safeInstallerCommand(os, sourceDir)} /></li>
       </ol>
     </div>
   );

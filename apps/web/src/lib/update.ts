@@ -86,6 +86,25 @@ export function installerCommand(osName: string | null | undefined, sourceDir: s
   return `cd <HomeMesh source folder> && ${pullStep}./deploy/linux/install.sh --upgrade`;
 }
 
+// Inside PowerShell "double quotes" `$` and the backtick expand ("$(...)" runs code) and a double quote,
+// typographic ones included, ends the string; `cd` (Set-Location -Path) treats [ ] as a wildcard.
+const POWERSHELL_SPECIAL = /["`$[\]“-„]/;
+
+/** The reported source folder if a command built from it does exactly what it shows, else null (the command
+ * then says `<HomeMesh source folder>`). The folder comes from that computer's hello, i.e. from another
+ * computer; installerCommand() shell-quotes it for sh, but its Windows form is `cd "<folder>"` (as in Python),
+ * so anything PowerShell interprets there is refused, and on every OS so are hidden or bidi characters. */
+export function commandSourceDir(osName: string | null | undefined, sourceDir: string | null | undefined): string | null {
+  if (!sourceDir || HIDDEN_CHARS.test(sourceDir)) return null;
+  if (osName === "windows" && POWERSHELL_SPECIAL.test(sourceDir)) return null;
+  return sourceDir;
+}
+
+/** installerCommand() for a command the page offers with a Copy button. */
+export function safeInstallerCommand(osName: string | null | undefined, sourceDir: string | null | undefined, opts: { pull?: boolean } = {}): string {
+  return installerCommand(osName, commandSourceDir(osName, sourceDir), opts);
+}
+
 // ---------------------------------------------------------------- node facts
 
 export function isBuildInfo(b: BuildInfo | InvalidBuild | null | undefined): b is BuildInfo {
