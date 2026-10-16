@@ -56,7 +56,9 @@ VENV_ID_PATTERN = r"^([0-9a-f]{12}|nogit|legacy)-[0-9]{14}$"
 """Name of a directory under ``<prefix>/venvs/``; only such names are ever pruned."""
 
 REF_NAME_PATTERN = r"^[A-Za-z0-9._/-]+$"
-"""Remote and branch names the runner accepts (and they must not start with ``-``)."""
+"""Remote and branch names the runner accepts. Also refused (git rejects them as ref names anyway, and
+``..`` is revision-range syntax): a leading ``-``, ``.`` or ``/``; a trailing ``/``, ``.`` or ``.lock``;
+``..`` or ``//`` anywhere. See :func:`is_ref_name`."""
 
 _SHA_RE = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 _RUN_ID_RE = re.compile(r"u[0-9]{14}-[0-9a-f]{8}")
@@ -77,7 +79,11 @@ def is_venv_id(value: object) -> bool:
 
 
 def is_ref_name(value: object) -> bool:
-    return isinstance(value, str) and not value.startswith("-") and _REF_NAME_RE.fullmatch(value) is not None
+    """A remote or branch name the runner may pass to git (after ``--end-of-options``). The runner carries an
+    identical copy; ``tests/unit/test_update_contracts.py`` keeps them in agreement."""
+    return (isinstance(value, str) and _REF_NAME_RE.fullmatch(value) is not None
+            and not value.startswith(("-", ".", "/")) and not value.endswith(("/", ".", ".lock"))
+            and ".." not in value and "//" not in value)
 
 
 def short_sha(sha: str | None) -> str | None:
@@ -190,6 +196,28 @@ def _sha_or_none(value: str | None) -> str | None:
     return value
 
 
+def _sha_or_drop(value: Any) -> str | None:
+    """For optional, informational commit fields added later: a bad value becomes None instead of making
+    the whole report unreadable (which would lose its outcome)."""
+    return value if is_sha(value) else None
+
+
+_PHASE_TOKEN_RE = re.compile(r"[a-z][a-z0-9_]{0,63}")
+
+
+def _phase(value: str) -> str:
+    # A phase this version doesn't know (from a newer runner on a computer updated ahead of the hub) is kept:
+    # rejecting it would drop the whole report, final status included. Only malformed text is refused.
+    if not _PHASE_TOKEN_RE.fullmatch(value):
+        raise ValueError("phase must be a lower-case word such as 'building'")
+    return value
+
+
+def _one_of(allowed: tuple[str, ...], fallback: str, value: Any) -> Any:
+    # Forward compatibility for descriptive vocabularies: a value a newer peer added reads as the fallback.
+    return value if value in allowed else fallback
+
+
 Code = Annotated[str, AfterValidator(partial(_line, CODE_MAX))]
 Message = Annotated[str, AfterValidator(partial(_text, MESSAGE_MAX))]
 Hint = Annotated[str, AfterValidator(partial(_text, HINT_MAX))]
@@ -200,6 +228,10 @@ Text = Annotated[str, AfterValidator(partial(_text, TEXT_MAX))]
 Timestamp = Annotated[str, AfterValidator(partial(_line, TIME_MAX))]
 JobIdText = Annotated[str, AfterValidator(partial(_line, ID_MAX))]
 Sha = Annotated[str, AfterValidator(_sha_or_none)]
+LenientSha = Annotated[str | None, BeforeValidator(_sha_or_drop)]
+PhaseName = Annotated[str, AfterValidator(_phase)]  # an UpdatePhase, or a newer runner's phase word
+LenientBuildSource = Annotated[BuildSource, BeforeValidator(partial(_one_of, get_args(BuildSource), "unknown"))]
+LenientBuildOS = Annotated[BuildOS, BeforeValidator(partial(_one_of, get_args(BuildOS), "other"))]
 
 
 def json_size(value: Any) -> int:
@@ -216,8 +248,14 @@ def lenient_dict(value: Any, max_bytes: int) -> dict[str, Any] | None:
     Used by the ``mode="before"`` validators of ``Hello.build`` / ``Hello.update`` / ``Heartbeat.update``.
     **Never raises**: a hello with a bad ``build`` must still be accepted (otherwise the coordinator closes
     the socket with 1002 and the worker reconnects forever, unreachable for updates).
+
+    A pydantic model passed by mistake (``Hello(build=info)`` instead of ``info.to_wire()``) is converted
+    with its ``to_wire()`` (or ``model_dump(mode="json")``) instead of silently becoming None.
     """
     try:
+        if isinstance(value, BaseModel):
+            to_wire = getattr(value, "to_wire", None)
+            value = to_wire() if callable(to_wire) else value.model_dump(mode="json")
         if not isinstance(value, dict) or json_size(value) > max_bytes:
             return None
         out = json.loads(json.dumps(value, ensure_ascii=False, allow_nan=False))  # str keys, plain JSON
@@ -313,10 +351,10 @@ class BuildInfo(BaseModel):
     commit_date: Timestamp | None = None
     branch: Name | None = None
     dirty: bool | None = None
-    source: BuildSource = "unknown"
+    source: LenientBuildSource = "unknown"  # a value added by a newer version reads as "unknown"
     reason: Text | None = None
     installed_at: Timestamp | None = None
-    os: BuildOS = "other"
+    os: LenientBuildOS = "other"  # likewise "other"
     can_update: bool = False
     cannot_update_reason: Text | None = None
     update_allowed: bool = False
@@ -395,6 +433,12 @@ class UpdateRunReport(BaseModel):
 
     ``model_validate(run_json)`` works directly (unknown run.json fields are ignored). ``status`` is ``None``
     while the run is in progress. ``job_id`` is ``None`` for local runs (``homemesh update``).
+
+    ``phase`` is one of :data:`PHASES`, or a phase word a newer runner added (kept, so its final status
+    still arrives; show it with ``PHASE_LABELS.get(phase, phase)``). ``expected_commit`` is the target the
+    run was asked for (``to_commit`` is only set once the runner verified it); ``installed_commit`` is what
+    the computer runs after the run ended (the agent's finalizer writes it for ``interrupted``; the runner
+    may write it at the end). Both are informational: a malformed value reads as None.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -403,10 +447,12 @@ class UpdateRunReport(BaseModel):
     run_id: str
     job_id: JobIdText | None = None
     origin: UpdateOrigin
-    phase: UpdatePhase
+    phase: PhaseName
     status: FinalStatus | None = None
+    expected_commit: LenientSha = None
     from_commit: Sha | None = None
     to_commit: Sha | None = None
+    installed_commit: LenientSha = None
     started_at: Timestamp
     updated_at: Timestamp
     finished_at: Timestamp | None = None
@@ -650,7 +696,7 @@ _DEFAULT_FIELDS: dict[str, str] = {
     "source_dir": "the HomeMesh source folder",
     "log": "the update log",
     "installer_command": "run the installer again (docs/UPDATING.md)",
-    "phase": "an unknown phase",
+    "phase": "working",  # "interrupted while working" / "is running on X (working)"
     "commit": "an unknown version",
     "short": "this version",
     "detail": "no details",

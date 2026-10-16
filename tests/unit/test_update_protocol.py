@@ -76,6 +76,22 @@ def test_malformed_but_small_build_is_kept_raw_and_parsed_leniently():
     assert pu.parse_build(h.build) is None  # the coordinator stores {"invalid": true}
 
 
+def test_build_values_from_a_newer_version_read_as_unknown_not_invalid():
+    b = pu.parse_build({**_build().to_wire(), "source": "zipfile", "os": "macos"})
+    assert b is not None and (b.source, b.os) == ("unknown", "other") and b.commit == SHA1
+
+
+def test_a_model_passed_instead_of_its_wire_dict_is_not_lost():
+    # Hello(build=info) instead of Hello(build=info.to_wire()) must not silently read as "no updater".
+    huge = "日" * 600
+    info = _build(reason=huge, cannot_update_reason=huge, branch=huge, source_dir="/" + huge)
+    h = _hello(build=info, update=pu.UpdateRunReport.model_validate(_report()))
+    assert h.build == info.to_wire() and pu.json_size(h.build) <= pu.MAX_BUILD_BYTES
+    assert pu.parse_report(h.update).run_id == RUN_ID
+    assert pm.Heartbeat(seq=1, telemetry={}, mode="balanced",
+                        update=pu.UpdateRunReport.model_validate(_report())).update["phase"] == "building"
+
+
 def test_update_report_size_cap_on_hello_and_heartbeat():
     small = _report(log="/l/" + "x" * 200)
     big = _report(log="/l/" + "x" * pu.MAX_REPORT_BYTES)
@@ -197,10 +213,26 @@ def test_run_report_validation_and_states():
     assert r.restarting and not r.final
     r = pu.UpdateRunReport.model_validate(_report(phase="cleanup", status="ok", to_commit=SHA1))
     assert r.final and not r.restarting
-    for bad in (_report(run_id="u1"), _report(phase="dancing"), _report(status="great"), _report(origin="hub"),
-                _report(to_commit="main")):
+    for bad in (_report(run_id="u1"), _report(phase="Dancing!"), _report(phase=""), _report(phase=5),
+                _report(status="great"), _report(origin="hub"), _report(to_commit="main")):
         assert pu.parse_report(bad) is None
     assert pu.parse_report("nope") is None and pu.parse_report(None) is None
+
+
+def test_a_newer_runners_phase_still_delivers_the_outcome():
+    # A worker updated by hand ahead of its hub may run a runner with a phase this hub doesn't know: the
+    # report must still parse, or its final status (the outcome) would be lost.
+    r = pu.parse_report(_report(phase="verifying_twice", status="ok", to_commit=SHA1))
+    assert r is not None and r.final and r.status == "ok" and not r.restarting
+    assert pu.PHASE_LABELS.get(r.phase, r.phase) == "verifying_twice"
+
+
+def test_report_carries_target_and_installed_commit_leniently():
+    r = pu.parse_report(_report(expected_commit=SHA1, installed_commit=SHA256, status="interrupted"))
+    assert (r.expected_commit, r.installed_commit) == (SHA1, SHA256)
+    assert r.to_wire()["installed_commit"] == SHA256
+    r = pu.parse_report(_report(expected_commit="HEAD", installed_commit=7, status="interrupted"))
+    assert r is not None and r.expected_commit is None and r.installed_commit is None
 
 
 def test_run_report_wire_form_always_fits():
@@ -264,6 +296,10 @@ def test_format_fills_fields_and_never_crashes():
     i = pu.format_update_error("something_new")
     assert i.code == "something_new" and "something_new" in i.message
     assert pu.format_update_error("update_busy", phase=object()).code == "update_busy"
+    # without a phase the sentences still read naturally
+    assert "interrupted while working (" in pu.format_update_error("update_interrupted").message
+    assert pu.format_update_error("update_busy", computer="pc", phase="checking for updates").message == \
+        "Another update or check is running on pc (checking for updates)."
 
 
 def test_text_hygiene():
@@ -276,6 +312,11 @@ def test_text_hygiene():
     assert pu.is_venv_id("0123456789ab-20261013120000") and pu.is_venv_id("legacy-20261013120000")
     assert not pu.is_venv_id("../x-20261013120000")
     assert pu.is_ref_name("feature/x-1.2") and not pu.is_ref_name("--upload-pack=x") and not pu.is_ref_name("a b")
+    for bad in ("..", "main..evil", "a//b", "/main", "main/", ".hidden", "main.", "main.lock", "", "@{u}",
+                "HEAD@{1}", "main\n", None):
+        assert not pu.is_ref_name(bad), bad
+    for good in ("origin", "main", "release/0.3", "v1.2_rc-1", "HEAD"):
+        assert pu.is_ref_name(good), good
     assert pu.short_sha(SHA1) == "aaaaaaa" and pu.short_sha(None) is None
     for pattern, ok in ((pu.SHA_PATTERN, SHA1), (pu.RUN_ID_PATTERN, RUN_ID),
                         (pu.VENV_ID_PATTERN, "legacy-20261013120000"), (pu.REF_NAME_PATTERN, "main")):
