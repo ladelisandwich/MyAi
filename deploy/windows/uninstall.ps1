@@ -6,7 +6,7 @@
       powershell -ExecutionPolicy Bypass -File deploy\windows\uninstall.ps1 [-RemoveData]
 
   Stops HomeMesh, removes the per-user autostart entry, the program folder
-  (%LOCALAPPDATA%\Programs\HomeMesh) and its PATH entry.
+  (%LOCALAPPDATA%\Programs\HomeMesh, with every installed version in venvs\) and its PATH entry.
 
   Your data (conversations, memories, settings, keys, backups) in %LOCALAPPDATA%\HomeMesh and
   %APPDATA%\HomeMesh is KEPT unless you pass -RemoveData and type DELETE to confirm.
@@ -40,6 +40,13 @@ if ($parts -contains $BinDir) {
   [Environment]::SetEnvironmentVariable("HOMEMESH_ENV_REFRESH", $null, "User")
 }
 
+# Since 0.3.0 venv is a directory junction to venvs\<id>. Remove the junctions themselves first
+# ([IO.Directory]::Delete without recursion never follows one), then the folder with every version in it.
+foreach ($link in @("venv", "venv.next", "venv.old")) {
+  $path = Join-Path $Prefix $link
+  try { $attr = [IO.File]::GetAttributes($path) } catch { continue }
+  if ($attr -band [IO.FileAttributes]::ReparsePoint) { [IO.Directory]::Delete($path, $false) }
+}
 if (Test-Path $Prefix) { Remove-Item -Recurse -Force $Prefix }
 Write-Host "HomeMesh program removed."
 

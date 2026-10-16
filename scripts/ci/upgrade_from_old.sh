@@ -29,6 +29,11 @@ if kill -0 "$old_pid" 2>/dev/null; then echo "the old process $old_pid is still 
 rc=0; homemesh status || rc=$?
 [ "$rc" = 0 ] || [ "$rc" = 2 ] || { echo "not running after the upgrade (status exit $rc)"; exit 1; }
 homemesh version | grep -F "$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$ROOT/src/homemesh/version.py")"
+# Since 0.3.0 the venv path is a link to venvs/<id>; the old real folder is kept as venvs/legacy-<time>.
+[ -L "$VENV" ] || { echo "the old venv folder was not converted to a link"; exit 1; }
+case "$(readlink "$VENV")" in venvs/*) ;; *) echo "unexpected link target: $(readlink "$VENV")"; exit 1 ;; esac
+ls "$(dirname "$VENV")/venvs" | grep -q '^legacy-[0-9]\{14\}$' || { echo "the old program folder was not kept"; exit 1; }
+[ -f "$VENV/homemesh-install.json" ] || { echo "no install record in the new venv"; exit 1; }
 grep -q '"ready": true' "$HOMEMESH_HOME/data/homemesh.pid" || { echo "no new PID record"; exit 1; }
 n="$(running | grep -c . || true)"
 [ "$n" = 1 ] || { echo "expected one HomeMesh process, found $n"; ps -o pid,args -p "$(running | paste -sd, -)"; exit 1; }

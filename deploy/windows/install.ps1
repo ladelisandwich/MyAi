@@ -11,9 +11,12 @@
   your system's execution policy.
 
   What it does:
-    * creates a virtual environment in %LOCALAPPDATA%\Programs\HomeMesh\venv
-    * installs HomeMesh from this source tree into it (pip downloads its dependencies from PyPI)
-    * builds the web UI if Node.js is available and no prebuilt UI is present
+    * builds the web UI if Node.js is available and the built UI is missing or older than its sources
+    * installs HomeMesh from this source tree into a NEW virtual environment,
+      %LOCALAPPDATA%\Programs\HomeMesh\venvs\<commit>-<time> (pip downloads its dependencies from
+      PyPI), while an installed HomeMesh keeps running
+    * points %LOCALAPPDATA%\Programs\HomeMesh\venv (a directory junction, no admin rights needed) at
+      it, restarting HomeMesh if it ran; the previous version's folder is kept, older ones removed
     * creates %LOCALAPPDATA%\Programs\HomeMesh\bin\homemesh.cmd and adds that folder to YOUR
       user PATH (skip with -NoPath)
     * with -AutoStart: adds a per-user autostart entry (HKCU\...\Run) so HomeMesh starts at logon
@@ -34,8 +37,11 @@ $ErrorActionPreference = "Stop"
 
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $Prefix = Join-Path $env:LOCALAPPDATA "Programs\HomeMesh"
-$Venv = Join-Path $Prefix "venv"
+$Venv = Join-Path $Prefix "venv"     # junction to venvs\<id>; launchers only ever use this path
+$Venvs = Join-Path $Prefix "venvs"
 $BinDir = Join-Path $Prefix "bin"
+# The only folder names under venvs\ that are ever removed (installer and updater use the same rule).
+$IdPattern = '^([0-9a-f]{12}|nogit|legacy)-[0-9]{14}$'
 $Exe = Join-Path $Venv "Scripts\homemesh.exe"
 # HomeMesh is always run as "python.exe -m homemesh": the venv's python.exe is Python's signed
 # launcher, whereas pip's generated homemesh.exe is unsigned and Windows 11 Smart App Control may
@@ -62,6 +68,52 @@ function Invoke-Native([string]$File, [string[]]$Arguments, [switch]$Quiet) {
 
 function Invoke-HomeMesh([string[]]$Arguments, [switch]$Quiet) {
   return Invoke-Native $VPy (@("-m", "homemesh") + $Arguments) -Quiet:$Quiet
+}
+
+# The last line a native program prints, or $null if it fails (stderr ignored).
+function Get-NativeOutput([string]$File, [string[]]$Arguments) {
+  $prev = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    $out = & $File @Arguments 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $out) { return $null }
+    return ([string]($out | Select-Object -Last 1)).Trim()
+  } catch {
+    return $null
+  } finally {
+    $ErrorActionPreference = $prev
+  }
+}
+
+# What a path is, without following a junction: "none", "link" (junction/symlink), "dir" or "file".
+function Get-EntryKind([string]$Path) {
+  try { $attr = [IO.File]::GetAttributes($Path) } catch { return "none" }
+  if ($attr -band [IO.FileAttributes]::ReparsePoint) { return "link" }
+  if ($attr -band [IO.FileAttributes]::Directory) { return "dir" }
+  return "file"
+}
+
+# Rename a folder or a junction itself (a junction is never followed), retried for 2 seconds: a
+# virus scanner or the search indexer may hold it open for a moment.
+function Move-Entry([string]$From, [string]$To) {
+  for ($i = 0; $i -lt 20; $i++) {
+    try { [IO.Directory]::Move($From, $To); return $true } catch { Start-Sleep -Milliseconds 100 }
+  }
+  return $false
+}
+
+# Remove a junction only (never what it points to).
+function Remove-Junction([string]$Path) {
+  if ((Get-EntryKind $Path) -eq "link") { [IO.Directory]::Delete($Path, $false) }
+}
+
+# Processes whose program file lies under one of these folders.
+function Get-ProcessesUnder([string[]]$Dirs) {
+  $prefixes = @($Dirs | ForEach-Object { $_.TrimEnd('\') + '\' })
+  return @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+      $path = $_.Path
+      $path -and @($prefixes | Where-Object { $path.StartsWith($_, [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
+    })
 }
 
 # Python check: version >= 3.11, venv module and SQLite FTS5 (used for search).
@@ -131,53 +183,155 @@ if ($WebStale) {
   }
 }
 
-# ---- Virtual environment + package -------------------------------------------------------
+# ---- New virtual environment (built while the installed version keeps running) -------------
+$switched = $false
 if ((Test-Path $Exe) -and -not $Upgrade) {
   Say "HomeMesh is already installed in $Venv - re-run with -Upgrade to update it."
 } else {
   $wasRunning = $false
+  $ts = [DateTime]::UtcNow.ToString("yyyyMMddHHmmss")
+  $git = Get-Command git.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  $sha = $null
+  if ($git -and (Test-Path (Join-Path $Root ".git"))) {
+    $sha = Get-NativeOutput $git.Source @("-C", $Root, "rev-parse", "--verify", "-q", "HEAD")
+  }
+  if ($sha -and ($sha -cmatch '^[0-9a-f]{40}([0-9a-f]{24})?$')) { $Id = "$($sha.Substring(0, 12))-$ts" } else { $Id = "nogit-$ts" }
+  $NewVenv = Join-Path $Venvs $Id
+  $NewPy = Join-Path $NewVenv "Scripts\python.exe"
+  if ((Get-EntryKind $NewVenv) -ne "none") { Fail "$NewVenv already exists; run the installer again." }
+
+  # Anything that fails before the switch removes the half-built folder; the installed version is untouched.
+  function Remove-NewVenv {
+    if ((Get-EntryKind $NewVenv) -eq "dir") { Remove-Item -LiteralPath $NewVenv -Recurse -Force -ErrorAction SilentlyContinue }
+  }
+  function Fail-BeforeSwitch([string]$Message) {
+    Remove-NewVenv
+    if ($wasRunning) {
+      $Message += " HomeMesh was stopped for the upgrade and the installed version is unchanged: start it again with 'homemesh start'."
+    }
+    Fail $Message
+  }
+
+  Say "Installing into $NewVenv ..."
+  New-Item -ItemType Directory -Force -Path $Venvs | Out-Null
+  if (Invoke-Native $PyExe @("-m", "venv", $NewVenv)) { Fail-BeforeSwitch "Could not create the virtual environment." }
+  if (Invoke-Native $NewPy @("-m", "pip", "install", "--quiet", "--disable-pip-version-check", "--upgrade", "pip")) {
+    Fail-BeforeSwitch "pip upgrade failed (check your internet connection or proxy)."
+  }
+  if (Invoke-Native $NewPy @("-m", "pip", "install", "--quiet", "--disable-pip-version-check", "--upgrade", $Root)) {
+    Fail-BeforeSwitch "Installing HomeMesh failed - see the pip output above."
+  }
+  # The install record (commit, branch, where git and Node.js are) lets HomeMesh update itself later. The
+  # node directory, never an npm path: Get-Command npm finds npm.ps1. It refuses while an update runs.
+  $rec = @("-m", "homemesh", "update", "record-install", "--source", $Root, "--stable-venv", $Venv, "--built-by", "installer")
+  if ($git) { $rec += @("--git", $git.Source) }
+  $node = Get-Command node.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($node) { $rec += @("--node-dir", (Split-Path -Parent $node.Source)) }
+  if (Invoke-Native $NewPy $rec) { Fail-BeforeSwitch "The new version could not record its install (message above); nothing was changed." }
+
   if ((Test-Path $Exe) -and $Upgrade) {
     # Exit codes of 'homemesh status': 0 running, 2 running but degraded (e.g. Ollama down), 3 not running.
-    # It must be stopped before upgrading: Windows locks the running python.exe and extension modules.
+    # The installed (old) version is asked: it started the running process and knows how to find it.
     $code = Invoke-HomeMesh @("status") -Quiet
     $wasRunning = ($code -eq 0 -or $code -eq 2)
     if ($wasRunning) {
       Say "Stopping HomeMesh for the upgrade..."
-      if (Invoke-HomeMesh @("stop")) { Fail "Could not stop HomeMesh; run 'homemesh stop --force' and try again." }
+      if (Invoke-HomeMesh @("stop")) {
+        $wasRunning = $false
+        Fail-BeforeSwitch "Could not stop HomeMesh; run 'homemesh stop --force' and try again."
+      }
       $code = Invoke-HomeMesh @("status") -Quiet
       if ($code -eq 0 -or $code -eq 2) {
-        Fail ("HomeMesh still answers although 'homemesh stop' found nothing to stop (a process the installed " +
-              "version can't see). Sign out of Windows and back in (or restart), then run the upgrade again.")
+        $wasRunning = $false
+        Fail-BeforeSwitch ("HomeMesh still answers although 'homemesh stop' found nothing to stop (a process the " +
+                           "installed version can't see). Sign out of Windows and back in (or restart), then run the upgrade again.")
       }
     }
     # Windows keeps a program's files locked until the process has fully exited: wait for every process
-    # running from the HomeMesh folder (the stopped server, or e.g. 'homemesh logs -f' in another window).
+    # running from the HomeMesh folders (the stopped server, or e.g. 'homemesh logs -f' in another window).
     $busy = @()
     for ($i = 0; $i -lt 40; $i++) {
-      $busy = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($Venv, [StringComparison]::OrdinalIgnoreCase) })
+      $busy = Get-ProcessesUnder @($Venv, $Venvs)
       if ($busy.Count -eq 0) { break }
       Start-Sleep -Milliseconds 500
     }
     if ($busy.Count -gt 0) {
       $list = ($busy | ForEach-Object { "$($_.Id) $($_.ProcessName)" }) -join ", "
-      Fail ("Programs from $Venv are still running ($list), so their files can't be replaced. Close other " +
-            "windows that run 'homemesh' (e.g. 'homemesh logs -f') and run the upgrade again.")
+      if ((Get-EntryKind $Venv) -eq "dir") {
+        # A program folder from before 0.3.0 is moved aside below, which Windows refuses while it is in use.
+        Fail-BeforeSwitch ("Programs from $Venv are still running ($list), so the folder can't be moved. Close other " +
+                           "windows that run 'homemesh' (e.g. 'homemesh logs -f') and run the upgrade again.")
+      }
+      Write-Host "Note: programs from the previous version still run ($list); they keep working, and their folder is kept."
     }
   }
-  Say "Installing into $Venv ..."
-  New-Item -ItemType Directory -Force -Path $Prefix | Out-Null
-  if (Invoke-Native $PyExe @("-m", "venv", $Venv)) { Fail "Could not create the virtual environment." }
-  if (Invoke-Native $VPy @("-m", "pip", "install", "--quiet", "--disable-pip-version-check", "--upgrade", "pip")) {
-    Fail "pip upgrade failed (check your internet connection or proxy)."
+
+  # ---- Switch: venv becomes a junction to venvs\<id> -------------------------------------------
+  $next = "$Venv.next"
+  $old = "$Venv.old"
+  foreach ($leftover in @($next, $old)) {
+    # Leftovers of an interrupted switch: junctions only (a real folder there is not ours to delete).
+    $kind = Get-EntryKind $leftover
+    if ($kind -eq "link") { Remove-Junction $leftover }
+    elseif ($kind -ne "none") { Fail-BeforeSwitch "$leftover exists and is not a junction HomeMesh made; move it away and run the installer again." }
   }
-  if (Invoke-Native $VPy @("-m", "pip", "install", "--quiet", "--disable-pip-version-check", "--upgrade", $Root)) {
-    Fail "Installing HomeMesh failed - see the pip output above."
+  $legacy = $null
+  $prev = $null   # the version the junction pointed at before; kept below, to go back to
+  $kind = Get-EntryKind $Venv
+  if ($kind -eq "link") {
+    try { $prev = Split-Path -Leaf ([string]@((Get-Item -LiteralPath $Venv -Force).Target)[0]) } catch { $prev = $null }
+  } elseif ($kind -eq "dir") {
+    $prev = "legacy-$ts"
+    $legacy = Join-Path $Venvs $prev
+    Say "Moving the previous program folder to $legacy (kept in case you need to go back)..."
+    if (-not (Move-Entry $Venv $legacy)) {
+      Fail-BeforeSwitch "Could not move $Venv (a program may still use it). Close other windows that run 'homemesh' and run the installer again."
+    }
+  } elseif ($kind -eq "file") {
+    Fail-BeforeSwitch "$Venv exists but is not a folder; move it away and run the installer again."
   }
+  try {
+    New-Item -ItemType Junction -Path $next -Target $NewVenv | Out-Null
+    if ((Get-EntryKind $Venv) -eq "link" -and -not (Move-Entry $Venv $old)) { throw "the current junction $Venv could not be renamed" }
+    if (-not (Move-Entry $next $Venv)) { throw "the new junction could not be renamed to $Venv" }
+  } catch {
+    # Put the previous version back exactly as it was.
+    $why = $_.Exception.Message
+    if ((Get-EntryKind $Venv) -eq "none") {
+      if ((Get-EntryKind $old) -eq "link") { [void](Move-Entry $old $Venv) }
+      elseif ($legacy) { [void](Move-Entry $legacy $Venv) }
+    }
+    try { Remove-Junction $next } catch { }
+    Fail-BeforeSwitch "Switching to the new version failed ($why); the previous version is still installed."
+  }
+  $switched = $true
+  try { Remove-Junction $old } catch { Write-Host "Note: could not remove $old; it is harmless." }
+
   if ($wasRunning) {
     Say "Starting HomeMesh again (database migrations run automatically, with a backup first)..."
     if (Invoke-HomeMesh @("start")) {
       Write-Warning ("The upgrade is installed, but HomeMesh did not come back up (message above). " +
                      "Check 'homemesh status' and 'homemesh logs'.")
+    }
+  }
+
+  # Keep the version the junction points at and the one it pointed at before (else the newest other
+  # one), to go back to; remove older ones, by their generated names only, and not while a program
+  # still runs from them.
+  $others = @(Get-ChildItem -LiteralPath $Venvs -Force -ErrorAction SilentlyContinue | Where-Object {
+      $_.PSIsContainer -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -and
+      ($_.Name -cmatch $IdPattern) -and ($_.Name -ne $Id) })
+  if ($others.Count -gt 1) {
+    $keep = $null
+    if ($prev -and (@($others | Where-Object { $_.Name -eq $prev }).Count -eq 1)) { $keep = $prev }
+    else { $keep = (@($others | Sort-Object { $_.Name.Substring($_.Name.LastIndexOf("-") + 1) }, Name))[-1].Name }
+    foreach ($dir in @($others | Where-Object { $_.Name -ne $keep })) {
+      if ((Get-ProcessesUnder @($dir.FullName)).Count -gt 0) { continue }
+      try {
+        Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction Stop
+      } catch {
+        Write-Host "Note: could not remove the old program folder $($dir.FullName): $($_.Exception.Message)"
+      }
     }
   }
 }
@@ -209,6 +363,9 @@ if (-not $NoPath) {
 # ---- Optional automatic start ---------------------------------------------------------------
 if ($AutoStart) {
   [void](Invoke-HomeMesh @("service", "install"))
+} elseif ($switched -and (Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "HomeMesh" -ErrorAction SilentlyContinue)) {
+  # Refresh an existing autostart entry from the new code (it keeps pointing at the stable venv path).
+  [void](Invoke-HomeMesh @("service", "install") -Quiet)
 }
 
 Say "Installed:"
@@ -220,6 +377,7 @@ Next steps (in a new terminal):
   homemesh service install   # optional: start automatically when you log in
   homemesh start             # start in the background
   homemesh doctor            # check GPU, Ollama, ports, database
+  homemesh update allow      # optional: let the hub's web app update this computer
 
 Local AI models: install Ollama from https://ollama.com/download and pull a model, e.g.
   ollama pull llama3.2:3b

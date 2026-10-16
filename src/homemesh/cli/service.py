@@ -34,6 +34,16 @@ WIN_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
 def _python_for_service() -> str:
+    """The interpreter the unit / Run entry / background start use.
+
+    With an install record it is the one under the stable path ``<prefix>/venv`` (a link to the current
+    ``venvs/<id>``), so launchers follow updates instead of pinning one venv: a console script run from
+    ``~/.local/bin`` has the concrete ``venvs/<id>/bin/python`` as ``sys.executable``."""
+    from homemesh.update.record import service_python
+
+    stable = service_python()
+    if stable is not None:
+        return str(stable)
     exe = Path(sys.executable)
     if sys.platform == "win32":
         pyw = exe.with_name("pythonw.exe")
@@ -84,6 +94,9 @@ After=network-online.target
 Wants=network-online.target
 # Not set up yet (no config): don't start a default instance at login.
 ConditionPathExists={paths.config_file}
+# A broken install (e.g. the system Python changed under the venv) must not restart every 5 s forever.
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -207,9 +220,18 @@ def start(paths: AppPaths) -> tuple[bool, str]:
                    f"{paths.logs_dir / 'homemesh.log'} and {paths.logs_dir / 'console.log'}.")
 
 
-def _unit_active() -> bool:
+UNIT_ACTIVE_STATES = ("active", "activating", "reloading")
+
+
+def _unit_state() -> str:
+    """``systemctl --user is-active homemesh.service``: active, activating, reloading, deactivating,
+    inactive, failed, …"""
     r = run_quiet(["systemctl", "--user", "is-active", UNIT_NAME], capture_output=True, text=True, check=False)
-    return r.stdout.strip() in ("active", "activating", "reloading")
+    return (r.stdout or "").strip()
+
+
+def _unit_active() -> bool:
+    return _unit_state() in UNIT_ACTIVE_STATES
 
 
 def _wait_ready(paths: AppPaths, gave_up: Callable[[], bool], timeout_s: float = 60.0) -> bool:
@@ -228,10 +250,14 @@ def _wait_ready(paths: AppPaths, gave_up: Callable[[], bool], timeout_s: float =
 
 def stop(paths: AppPaths, timeout: float = 30.0, *, force: bool = False) -> str:
     if sys.platform.startswith("linux") and unit_path().exists() and systemd_available():
-        r = run_quiet(["systemctl", "--user", "is-active", UNIT_NAME], capture_output=True, text=True, check=False)
-        if r.stdout.strip() == "active":
+        # Every state except inactive/failed is systemd's to stop: "activating" is also a unit waiting to
+        # auto-restart after a crash, which a plain kill would not stop (the next restart comes 5 s later).
+        state = _unit_state()
+        if state in UNIT_ACTIVE_STATES or state == "deactivating":
             run_quiet(["systemctl", "--user", "stop", UNIT_NAME], check=False)
-            return "Stopped via systemd."
+            if not read_pid(paths):
+                return "Stopped via systemd."
+            # Another HomeMesh, started outside the unit (e.g. 'homemesh run' in a terminal), still runs.
     pid = read_pid(paths)
     if not pid:
         return "HomeMesh is not running."
