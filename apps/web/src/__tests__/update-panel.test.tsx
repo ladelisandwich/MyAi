@@ -476,6 +476,24 @@ describe("hub confirm dialog", () => {
     expect(window.localStorage.getItem(HUB_UPDATE_KEY)).toBeNull();
   });
 
+  it("keeps the record of a lost answer when a retry is refused (that update may be running)", async () => {
+    let calls = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) throw new TypeError("Failed to fetch"); // the hub took it, the answer got lost
+      return jsonResponse(409, { error: { code: "update_busy", message: "Another update or check is running on hub-pc (starting the update).", hint: "Wait for it to finish." } });
+    }));
+    const onHubRecord = vi.fn();
+    const hub = hubNode({ update_check: stored(result()) });
+    render(<UpdateDialog node={hub} result={result()} hub={hub} onClose={vi.fn()} onDone={vi.fn()} onHubRecord={onHubRecord} />);
+    fireEvent.click(screen.getByRole("button", { name: "Update" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Cannot reach the HomeMesh coordinator");
+    fireEvent.click(screen.getByRole("button", { name: "Update" }));
+    expect(await screen.findByText(/Another update or check is running on hub-pc/)).toBeInTheDocument();
+    expect(readHubUpdate()).toMatchObject({ node_id: "n-hub", update_id: null, expected_commit: SHA_B });
+    expect(onHubRecord).toHaveBeenLastCalledWith(expect.objectContaining({ node_id: "n-hub" }));
+  });
+
   it("keeps the record when the answer is lost", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("Failed to fetch"); }));
     const hub = hubNode({ update_check: stored(result()) });

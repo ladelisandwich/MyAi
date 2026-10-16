@@ -410,6 +410,8 @@ export function UpdateDialog({ node, result, hub, onClose, onDone, onHubRecord }
     setBusy(true);
     setError(null);
     let rec: HubUpdateRecord | null = null;
+    // A record from an earlier request of this hub (e.g. one whose answer got lost: that update may run).
+    const earlier = isHub ? readHubUpdate() : null;
     if (isHub && build) {
       // Saved before sending: from the moment the hub accepts, it may go away at any time.
       rec = hubUpdateRecord(node, build, target);
@@ -425,10 +427,16 @@ export function UpdateDialog({ node, result, hub, onClose, onDone, onHubRecord }
       }
       onDone();
     } catch (e) {
-      // A clear refusal (4xx) means nothing was started; keep the help when the outcome is unknown.
+      // A clear refusal (4xx) means this request started nothing; keep the help when the outcome is unknown.
+      // A refused retry (update_busy) must not drop the record of an earlier request that may be running.
       if (rec && e instanceof ApiError && e.status >= 400 && e.status < 500) {
-        clearHubUpdate();
-        onHubRecord?.(null);
+        if (earlier && earlier.node_id === node.id) {
+          writeHubUpdate(earlier);
+          onHubRecord?.(earlier);
+        } else {
+          clearHubUpdate();
+          onHubRecord?.(null);
+        }
       }
       setError(e);
     } finally {
