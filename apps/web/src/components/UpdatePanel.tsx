@@ -18,8 +18,9 @@ import "../styles/updates.css";
 
 // ---------------------------------------------------------------- small pieces
 
-/** A server message or hint: text, with `backtick` spans as <code> (and a Copy button for commands). */
-export function RichText({ text, copy = true }: { text: string | null | undefined; copy?: boolean }) {
+/** A server message or hint: text, with `backtick` spans as <code>. With `copy` (hints only: they come from
+ * the error table, while messages and reasons can carry git, pip or npm output) commands get a Copy button. */
+export function RichText({ text, copy = false }: { text: string | null | undefined; copy?: boolean }) {
   if (!text) return null;
   return (
     <>
@@ -47,7 +48,7 @@ function IssueText({ issue }: { issue: UpdateIssue }) {
   return (
     <>
       <RichText text={issue.message} />
-      {issue.hint && <> <span className="muted"><RichText text={issue.hint} /></span></>}
+      {issue.hint && <> <span className="muted"><RichText text={issue.hint} copy /></span></>}
     </>
   );
 }
@@ -155,9 +156,9 @@ function outcomeLine(u: NodeUpdate, node: NodeSummary) {
       return <>Interrupted while {phaseLabel(u.phase)}.{err && <> <IssueText issue={err} /></>}</>;
     }
     case "not_started":
-      return <>The update did not start.{err?.hint && <> <span className="muted"><RichText text={err.hint} /></span></>}</>;
+      return <>The update did not start.{err?.hint && <> <span className="muted"><RichText text={err.hint} copy /></span></>}</>;
     case "abandoned":
-      return <>Outcome unknown.{err?.hint && <> <span className="muted"><RichText text={err.hint} /></span></>}</>;
+      return <>Outcome unknown.{err?.hint && <> <span className="muted"><RichText text={err.hint} copy /></span></>}</>;
     default:
       // A state this page doesn't know (a newer hub): say what is stored, nothing more.
       return <>Last update: {String(u.state)}{err ? <>: <IssueText issue={err} /></> : ""}</>;

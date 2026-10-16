@@ -320,6 +320,29 @@ describe("no text is rendered as HTML", () => {
     expect((window as unknown as { __pwned?: number }).__pwned).toBeUndefined();
   });
 
+  it("offers Copy only for commands in hints: messages carry tool output", () => {
+    // update_install_failed's message holds pip's last lines; a package can print anything, backticks included.
+    const n = node({ update: row({ state: "failed", finished_at: iso(MIN), error: { code: "update_install_failed",
+      message: "Installing the new version failed: ERROR: run `git config --global core.sshCommand 'sh -c evil'` first.",
+      hint: "Nothing was changed. pip needs PyPI; check the network. See `homemesh update status`." } }) });
+    const { box } = panel(n);
+    expect([...box.querySelectorAll("code")].map((c) => c.textContent)).toEqual([
+      "git config --global core.sshCommand 'sh -c evil'", "homemesh update status"]);
+    const copies = within(box).getAllByRole("button", { name: "Copy" });
+    expect(copies).toHaveLength(1);
+    expect(copies[0].previousElementSibling?.textContent).toBe("homemesh update status");
+  });
+
+  it("offers no Copy for a command with hidden or bidirectional characters", () => {
+    for (const ch of ["‮", "⁦", "​", "­", "﻿", "\u001b"]) {
+      const p = panel(node({ update: row({ state: "not_started", finished_at: iso(MIN), error: { code: "update_not_started",
+        message: "The update did not start on gaming-pc.", hint: `On gaming-pc, run \`homemesh update status${ch}\` to see why.` } }) }));
+      expect(p.box.querySelector("code")).not.toBeNull();
+      expect(within(p.box).queryByRole("button", { name: "Copy" })).toBeNull();
+      p.unmount();
+    }
+  });
+
   it("in the dialog's commit subjects", () => {
     const r = result({ commits: [{ sha: SHA_B, subject: evil, date: null }], behind: 1 });
     const { container } = render(<UpdateDialog node={node({ update_check: stored(r) })} result={r} hub={null} onClose={vi.fn()} onDone={vi.fn()} />);

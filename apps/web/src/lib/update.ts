@@ -383,7 +383,14 @@ export function splitCode(text: string): TextPart[] {
   return parts.map((t, i) => ({ code: i % 2 === 1, text: t })).filter((p) => p.code || p.text);
 }
 
-/** A code part that is a command someone would paste into a terminal (gets a Copy button). */
+/** Characters that are invisible or reorder text on screen: C0/C1 controls, soft hyphen, zero-width and
+ * bidirectional formatting characters, the BOM. A command containing one can look different from what Copy
+ * puts on the clipboard, so it gets no Copy button and is never built into a command (commandSourceDir). */
+// eslint-disable-next-line no-control-regex
+export const HIDDEN_CHARS = /[\u0000-\u001f\u007f-\u009f­؜ᅟᅠ᠎​-‏‪-‮⁠-⁩﻿]/;
+
+/** A code part that is a command someone would paste into a terminal (gets a Copy button). Callers offer
+ * Copy only in hints, which come from the error table; messages can carry git, pip or npm output. */
 export function isCommand(code: string): boolean {
-  return /^(homemesh|git|gh|loginctl|winget|journalctl|powershell|cd) \S/.test(code);
+  return /^(homemesh|git|gh|loginctl|winget|journalctl|powershell|cd) \S/.test(code) && !HIDDEN_CHARS.test(code);
 }
