@@ -417,6 +417,35 @@ async def test_watch_finalizes_a_run_whose_runner_is_gone(home, monkeypatch):
     assert mgr.report["run_id"] == RUN and not mgr.draining
 
 
+async def test_concurrent_refreshes_never_bring_back_a_finalized_run(home, monkeypatch):
+    """The watch loop and the agent's pre-hello refresh can overlap; a step that read the run before the
+    other one finalized it must not overwrite the final report (nor keep rejecting jobs as "updating")."""
+    _updatable(monkeypatch)
+    _write_run(home, phase="switching")  # runner gone
+    real_read, real_finalize = files.read_latest_run, files.finalize_dead_run
+    finalized = threading.Event()
+    first = threading.Lock()
+
+    def read(paths):
+        latest = real_read(paths)
+        if first.acquire(blocking=False):  # the first step read the run; the other one finalizes it meanwhile
+            finalized.wait(1)
+        return latest
+
+    def finalize(paths, **kw):
+        run = real_finalize(paths, **kw)
+        if run is not None:
+            finalized.set()
+        return run
+
+    monkeypatch.setattr(files, "read_latest_run", read)
+    monkeypatch.setattr(files, "finalize_dead_run", finalize)
+    mgr, _ = _manager(home)
+    await asyncio.gather(mgr.refresh(), mgr.refresh())
+    assert files.read_run(home, RUN)["status"] == "interrupted"
+    assert mgr.report["status"] == "interrupted" and not mgr.draining
+
+
 async def test_watch_leaves_a_live_run_alone(home, monkeypatch):
     _updatable(monkeypatch)
     _write_run(home, phase="building")

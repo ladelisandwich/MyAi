@@ -94,6 +94,9 @@ class UpdateManager:
         self.agent_state: AgentState | None = None  # last state written to agent.json by this process
         self._last_check_launch: float | None = None  # monotonic time the last check runner was started
         self._watch_failed = False
+        # The watch loop and the agent (before each hello) both refresh; one at a time, so a step that read
+        # the run before another finalized it can't overwrite the newer report or draining flag.
+        self._refresh_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------ helpers for the agent
     @property
@@ -292,6 +295,10 @@ class UpdateManager:
 
     async def refresh(self) -> None:
         """One watch step. Never raises (except cancellation)."""
+        async with self._refresh_lock:
+            await self._refresh()
+
+    async def _refresh(self) -> None:
         try:
             run_id, run = await asyncio.to_thread(self._read_run)
             nonfinal = run is not None and run.get("status") is None
