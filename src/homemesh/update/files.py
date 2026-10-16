@@ -54,6 +54,7 @@ from homemesh.protocol.update import (
     AGENT_DETAIL_MAX,
     UpdateOrigin,
     UpdateRunReport,
+    clean_line,
     format_update_error,
     is_run_id,
     is_sha,
@@ -74,6 +75,9 @@ RUN_DIR_FILES = frozenset({"args.json", "run.json", "drain.json", "pre-update.sq
                            "homemesh.toml.bak", "worker-credentials.json.bak"})
 SNAPSHOT_FILES = frozenset({"pre-update.sqlite3", "pre-update.sqlite3-journal", "homemesh.toml.bak",
                             "worker-credentials.json.bak"})
+# Runs that ended with one of these error codes are never pruned: their snapshot is the owner's only copy of
+# the pre-update database (the hint of update_db_restore_failed names it). The owner deletes them by hand.
+KEEP_RUN_ERROR_CODES = frozenset({"update_db_restore_failed"})
 CAPTURE_FILE_RE = re.compile(r"cmd-[0-9]{1,6}\.out")  # runner command output captures
 TEMP_FILE_RE = re.compile(r"\.[A-Za-z0-9._-]{1,200}\.tmp")  # atomic-write temp files: .<name>.<random>.tmp
 _CHECK_FILE_RE = re.compile(r"(u[0-9]{14}-[0-9a-f]{8})(\.args)?\.json")
@@ -407,7 +411,7 @@ def write_agent_file(paths: AppPaths, *, state: AgentState, build_commit: str | 
         ensure_update_dir(paths)
     atomic_write_json(agent_file(paths), AgentFile(
         v=1, pid=pid, process_started=process_started, build_commit=build_commit, state=state,
-        detail=(detail or "")[:AGENT_DETAIL_MAX], at=now_iso()))
+        detail=clean_line(detail or "", AGENT_DETAIL_MAX), at=now_iso()))
 
 
 def read_agent_file(paths: AppPaths) -> dict[str, Any] | None:
@@ -530,8 +534,10 @@ def _remove_run_dir(path: Path) -> bool:
 def prune_runs(paths: AppPaths, keep: int = KEEP_RUNS) -> list[str]:
     """Keep the newest ``keep`` run directories (by run id, i.e. by start time; never by mtime), delete the
     snapshot and backups from all but the newest, and delete each pruned run's log. Never touches the run
-    ``latest.json`` names or a run without a final status. Only exact generated names are deleted, after
-    ``lstat`` checks (links and junctions are skipped). Best effort; returns the pruned run ids.
+    ``latest.json`` names, a run without a final status, or a run that ended with an error code in
+    :data:`KEEP_RUN_ERROR_CODES` (``update_db_restore_failed``: its snapshot is the only pre-update copy).
+    Only exact generated names are deleted, after ``lstat`` checks (links and junctions are skipped). Best
+    effort; returns the pruned run ids.
 
     The apply runner prunes with the same rules in its cleanup phase (it can't import this module).
     """
@@ -545,7 +551,7 @@ def prune_runs(paths: AppPaths, keep: int = KEEP_RUNS) -> list[str]:
     protected = {read_latest_run_id(paths)}
     for name in names:
         run = read_json(base / name / "run.json")
-        if run is not None and run.get("status") is None:
+        if run is not None and (run.get("status") is None or _error_code(run) in KEEP_RUN_ERROR_CODES):
             protected.add(name)
     newest = names[-1]
     removed: list[str] = []
@@ -560,6 +566,11 @@ def prune_runs(paths: AppPaths, keep: int = KEEP_RUNS) -> list[str]:
             for snap in SNAPSHOT_FILES:
                 _unlink_file(base / name / snap)
     return removed
+
+
+def _error_code(run: dict[str, Any]) -> str | None:
+    err = run.get("error")
+    return err.get("code") if isinstance(err, dict) else None
 
 
 def prune_checks(paths: AppPaths, keep: int = KEEP_CHECKS) -> list[str]:
@@ -631,7 +642,7 @@ class RunnerArgs(TypedDict):
     unit_path: str | None  # systemd unit file, when service == "systemd"
     git: str  # absolute path of the git executable
     node_dir: str | None  # directory holding node / node.exe, if known
-    homemesh_home: str | None  # HOMEMESH_HOME, passed on to HomeMesh processes the runner starts
+    homemesh_home: str | None  # HOMEMESH_HOME (absolute), set for HomeMesh processes the runner starts
     log: str  # this run's log file
     out: str | None  # check: checks/<run_id>.json; apply: None
 
@@ -659,7 +670,9 @@ def build_runner_args(
     """Assemble ``args.json`` for one runner (no I/O except resolving the current venv/package).
 
     ``current_venv`` defaults to ``realpath(sys.prefix)``, ``current_package_dir`` to the resolved
-    ``homemesh`` package, ``homemesh_home`` to ``$HOMEMESH_HOME``, ``consent_file`` to
+    ``homemesh`` package, ``homemesh_home`` to ``$HOMEMESH_HOME`` made absolute exactly as
+    ``common.paths.default_paths`` does (the runner starts HomeMesh from another working directory, so a
+    relative value would point it at another data folder), ``consent_file`` to
     ``consent.marker_path(paths)``. ``log`` and ``out`` are derived from the mode and run id. Raises
     ``ValueError`` for inconsistent arguments (programming errors, not user errors).
     """
@@ -686,7 +699,8 @@ def build_runner_args(
 
         current_package_dir = Path(homemesh.__file__).resolve().parent
     if homemesh_home is ...:
-        homemesh_home = os.environ.get("HOMEMESH_HOME") or None
+        env_home = os.environ.get("HOMEMESH_HOME")
+        homemesh_home = os.fspath(Path(env_home).expanduser().resolve()) if env_home else None
     if consent_file is None:
         from homemesh.update import consent  # consent imports this module; import late
 
@@ -705,7 +719,8 @@ def build_runner_args(
         instance_lock=_abs(paths.lock_file), stop_request_file=_abs(paths.stop_request_file),
         consent_file=_abs(consent_file), roles=list(roles), service=service,
         unit_path=_abs(unit_path) if unit_path is not None else None, git=_abs(git),
-        node_dir=_abs(node_dir) if node_dir is not None else None, homemesh_home=homemesh_home,
+        node_dir=_abs(node_dir) if node_dir is not None else None,
+        homemesh_home=_abs(homemesh_home) if homemesh_home is not None else None,
         log=_abs(log), out=_abs(check_result_file(paths, run_id)) if mode == "check" else None,
     )
 

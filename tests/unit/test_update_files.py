@@ -4,6 +4,8 @@ finalizing a dead run, pruning and the args.json contract."""
 import json
 import os
 import stat
+import sys
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -49,6 +51,23 @@ def test_atomic_write_round_trip_owner_only_and_no_leftovers(tmp_path):
     with pytest.raises(ValueError):
         files.atomic_write_json(target, {"x": float("nan")})
     assert files.read_json(target)["n"] == 2 and len(list(tmp_path.iterdir())) == 1
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows: an open reader blocks os.replace")
+def test_atomic_write_waits_out_a_real_windows_reader(tmp_path):
+    # The real thing the retry is for: Python's open() doesn't share delete access, so while another
+    # handle has the file open, os.replace onto it fails with PermissionError until that handle closes.
+    target = tmp_path / "run.json"
+    files.atomic_write_json(target, {"n": 1})
+    reader = open(target, "rb")  # held open on purpose; the timer closes it
+    timer = threading.Timer(0.4, reader.close)
+    timer.start()
+    try:
+        files.atomic_write_json(target, {"n": 2})
+    finally:
+        timer.cancel()
+        reader.close()
+    assert files.read_json(target) == {"n": 2} and [p.name for p in tmp_path.iterdir()] == ["run.json"]
 
 
 def test_atomic_write_refuses_a_symlinked_destination(tmp_path):
@@ -196,6 +215,8 @@ def test_agent_and_drain_files(home):
     agent = files.read_agent_file(home)
     assert agent["v"] == 1 and agent["pid"] == os.getpid() and agent["state"] == "connected"
     assert agent["build_commit"] == SHA and len(agent["detail"]) == pu.AGENT_DETAIL_MAX
+    files.write_agent_file(home, state="rejected", build_commit=None, detail="closed 4403\x1b[2K\nby hub")
+    assert files.read_agent_file(home)["detail"] == "closed 4403[2Kby hub"  # one clean line
     assert isinstance(agent["process_started"], float)
     rid = _rid(4)
     files.run_dir(home, rid).mkdir(parents=True)
@@ -236,6 +257,22 @@ def test_prune_runs(home):
     assert files.prune_runs(home, keep=5) == ids[:3]
     assert sorted(p.name for p in files.runs_dir(home).iterdir()) == ids[3:]
     assert not files.apply_log_file(home, ids[0]).exists() and files.apply_log_file(home, ids[3]).exists()
+
+
+def test_prune_keeps_a_run_whose_database_restore_failed(home):
+    # Its snapshot is the owner's only copy of the pre-update database (the error hint names it), so
+    # neither the run nor its snapshot is ever pruned, however many runs follow.
+    files.ensure_update_dir(home)
+    ids = [_rid(i) for i in range(50, 58)]
+    for rid in ids:
+        _run(home, rid, status="ok")
+        (files.run_dir(home, rid) / "pre-update.sqlite3").write_bytes(b"db")
+    _run(home, ids[0], status="failed", error={"code": "update_db_restore_failed", "message": "m", "hint": "h"})
+    files.write_latest(home, ids[-1])
+    assert files.prune_runs(home, keep=2) == ids[1:-2]
+    assert (files.run_dir(home, ids[0]) / "pre-update.sqlite3").read_bytes() == b"db"
+    assert not (files.run_dir(home, ids[-2]) / "pre-update.sqlite3").exists()
+    assert (files.run_dir(home, ids[-1]) / "pre-update.sqlite3").exists()
 
 
 def test_prune_runs_skips_links(home, tmp_path):
@@ -302,7 +339,15 @@ def test_runner_args_check_and_validation(home, tmp_path, monkeypatch):
     assert args["db_file"] == str(home.db_file) and args["homemesh_home"] == str(home.config_dir)
     assert args["log"] == str(files.check_log_file(home, _rid(41)))
     assert files.write_runner_args(home, args) == files.check_args_file(home, _rid(41))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOMEMESH_HOME", "relative-home")  # the runner starts HomeMesh from <data>/update
+    assert _args(home, tmp_path, homemesh_home=...)["homemesh_home"] == str((tmp_path / "relative-home").resolve())
+    monkeypatch.setenv("HOMEMESH_HOME", "~/hm")
+    assert _args(home, tmp_path, homemesh_home=...)["homemesh_home"] == str(Path("~/hm").expanduser().resolve())
+    monkeypatch.delenv("HOMEMESH_HOME")
+    assert _args(home, tmp_path, homemesh_home=...)["homemesh_home"] is None
     for bad in ({"expected_commit": None}, {"expected_commit": "origin/main"}, {"run_id": "../x"},
+                {"homemesh_home": "relative-home"},
                 {"mode": "rollback"}, {"roles": []}, {"roles": ["admin"]}, {"service": "launchd"},
                 {"service": "systemd"}, {"source_dir": "relative/src"}, {"origin": "hub"},
                 {"mode": "check"}, {"unit_path": tmp_path / "u.service"}):
