@@ -214,6 +214,9 @@ describe("panelState", () => {
   it("shows a local run reported live, but not a finished one", () => {
     expect(st(node({ update_live: report({ job_id: null, origin: "local", phase: "starting" }) }))).toMatchObject({ kind: "active", local: true, step: "restarting" });
     expect(st(node({ update_live: report({ job_id: null, origin: "local", status: "ok", phase: "cleanup" }) })).kind).toBe("unchecked");
+    // A remote run whose row the hub ended as a guess (not_started) still runs: shown, but not called local.
+    const guess = row({ state: "not_started", finished_at: iso(MIN) });
+    expect(st(node({ update: guess, update_live: report({ phase: "building" }) }))).toMatchObject({ kind: "active", local: false });
   });
 
   it("makes an abandoned update active again when it reports", () => {

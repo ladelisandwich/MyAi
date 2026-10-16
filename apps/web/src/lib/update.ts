@@ -131,7 +131,8 @@ export function activeUpdate(n: Pick<NodeSummary, "update">): NodeUpdate | null 
 }
 
 /** A run reported live that is not (yet) a final outcome and not the node's active remote update, e.g.
- * `homemesh update` started on that computer. Only trusted while the computer is connected. */
+ * `homemesh update` started on that computer (origin "local"), or a remote run whose row the hub ended as a
+ * guess while another update was active. Only trusted while the computer is connected. */
 export function liveLocalRun(n: Pick<NodeSummary, "online" | "update" | "update_live">): UpdateRunReport | null {
   const live = n.update_live;
   if (!n.online || !live || live.status != null) return null;
@@ -253,7 +254,9 @@ export function panelState(n: NodeSummary, now: number, { checking = false } = {
     return { kind: "active", step: activeStep(phase), phase, startedAt: live?.started_at ?? act.requested_at, local: false };
   }
   const local = liveLocalRun(n);
-  if (local) return { kind: "active", step: activeStep(local.phase), phase: local.phase, startedAt: local.started_at, local: true };
+  if (local) {
+    return { kind: "active", step: activeStep(local.phase), phase: local.phase, startedAt: local.started_at, local: local.origin === "local" };
+  }
   if (isProtocolIncompatible(n)) return { kind: "protocol" };
   if (n.build == null) return { kind: "no_updater" };
   if (!isBuildInfo(n.build)) return { kind: "invalid_build" };
