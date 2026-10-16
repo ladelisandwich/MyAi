@@ -192,6 +192,26 @@ def test_start_run_status_restart_say_an_update_is_in_progress(paths, capsys, mo
     assert hm(paths, "start") == 0 and "Started." in capsys.readouterr().out
 
 
+def test_worker_status_keeps_its_coordinator_link_line(paths, capsys):
+    """The update line is added to a worker's status; the link check stays, with or without an update."""
+    _set_up(paths)
+    capsys.readouterr()
+    assert hm(paths, "--json", "status") == 3
+    data = json.loads(capsys.readouterr().out)
+    assert data["worker_process"] == "not running" and "update" not in data
+    assert "not joined to a HomeMesh coordinator" in data["coordinator_link"]
+    _write_run(paths, phase="switching")
+    lock = files.update_lock(paths)
+    assert lock.acquire()
+    try:
+        assert hm(paths, "--json", "status") == 3
+        data = json.loads(capsys.readouterr().out)
+    finally:
+        lock.release()
+    assert data["worker_process"].startswith("An update is in progress")
+    assert "not joined to a HomeMesh coordinator" in data["coordinator_link"]
+
+
 # --------------------------------------------------------------------------- record-install
 
 

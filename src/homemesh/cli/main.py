@@ -179,12 +179,12 @@ def cmd_status(ctx: Ctx) -> int:
         info["mode"] = "worker" if cfg.has_role("worker") else "client"
         if cfg.has_role("worker"):
             info["worker_process"] = "running" if pid else (update_line or "not running")
-        if update_line and (pid or not cfg.has_role("worker")):
-            info["update"] = update_line
             from homemesh.cli.doctor import _worker_link
 
             c = _worker_link(cfg, ctx.paths)
             info["coordinator_link"] = f"{SYMBOL[c.status]} {c.detail}"
+        if update_line and (pid or not cfg.has_role("worker")):
+            info["update"] = update_line
         _out(info, True) if ctx.args.json else print("\n".join(f"{k}: {v}" for k, v in info.items()))
         return EXIT_OK if pid or not cfg.has_role("worker") else EXIT_NOT_RUNNING
     client = ctx.client()
