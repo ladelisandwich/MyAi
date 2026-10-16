@@ -31,6 +31,17 @@ def test_runner_imports_only_the_standard_library():
     assert not bad, f"runner.py must import only the standard library (it runs with -I -S): {bad}"
     calls = {n.func.id for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
     assert "__import__" not in calls
+    # nor a dynamic import or a sys.path change that could reach homemesh or site-packages after all
+    assert not [n for n in imports if n[0].split(".")[0] == "importlib"]
+    attrs = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+    assert not attrs & {"import_module", "path_hooks", "meta_path"}
+    assert not [n for n in ast.walk(tree) if isinstance(n, ast.Attribute) and n.attr == "path"
+                and isinstance(n.value, ast.Name) and n.value.id == "sys"], "runner.py must not touch sys.path"
+
+
+def test_runner_parses_as_python_3_11():
+    # It runs on the base interpreter, which may be the oldest Python HomeMesh supports (pyproject: >= 3.11).
+    ast.parse(RUNNER.read_text(encoding="utf-8"), feature_version=(3, 11))
 
 
 def test_runner_command_line():
