@@ -31,7 +31,7 @@ def test_record_round_trip_and_tolerant_load(tmp_path):
     prefix, venv, rec = _install(tmp_path, source_dir=tmp_path / "src")
     loaded = record.load(venv)
     assert loaded == rec and loaded.layout == record.layout_version() == 1
-    assert loaded.venv == os.path.abspath(venv) and loaded.stable_venv == os.path.abspath(prefix / "venv")
+    assert loaded.venv == os.path.realpath(venv) and loaded.stable_venv == os.path.abspath(prefix / "venv")
     assert loaded.python == ".".join(map(str, sys.version_info[:3]))
     data = json.loads(record.record_path(venv).read_text(encoding="utf-8"))
     assert data["v"] == 1 and "url" not in json.dumps(data).lower()
@@ -49,6 +49,36 @@ def test_make_record_drops_ref_names_the_runner_would_refuse(tmp_path):
     rec = record.make_record(venv=tmp_path, stable_venv=tmp_path, built_by="updater", branch="--x", remote="a b",
                              run_id="u20261013120000-0123abcd")
     assert rec.branch is None and rec.remote is None and rec.run_id == "u20261013120000-0123abcd"
+
+
+def test_make_record_stores_the_concrete_venv_not_the_link(tmp_path):
+    prefix, venv, _rec = _install(tmp_path)
+    symlink_or_skip(venv, prefix / "venv")
+    rec = record.make_record(venv=prefix / "venv", stable_venv=prefix / "venv", built_by="installer")
+    assert rec.venv == os.path.realpath(venv) and rec.stable_venv == os.path.abspath(prefix / "venv")
+
+
+def test_build_info_and_consent_never_raise(tmp_path, home, monkeypatch):
+    # build_info() runs for every hello: an unreadable folder must give "unknown", not a crashed agent.
+    def denied(self, *a, **kw):
+        raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr(type(tmp_path), "is_file", denied)
+    assert consent.remote_allowed(home) is False
+    monkeypatch.setattr(type(tmp_path), "exists", denied)
+    info = record.build_info(home, prefix=tmp_path)
+    assert info.source == "unknown" and info.commit is None and not info.can_update
+    assert "PermissionError" in info.reason and info.version == __version__
+    assert record.service_python(record.make_record(venv=tmp_path, stable_venv=tmp_path,
+                                                    built_by="installer")) is None
+
+    def broken(*a, **kw):
+        raise RuntimeError("boom")
+
+    monkeypatch.undo()
+    monkeypatch.setattr(record, "load", broken)
+    info = record.build_info(home, prefix=tmp_path)
+    assert info.source == "unknown" and "boom" in info.reason and info.to_wire()["source"] == "unknown"
 
 
 def test_build_info_from_record(tmp_path, home):

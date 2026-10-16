@@ -109,7 +109,10 @@ def make_record(*, stable_venv: str | os.PathLike[str], built_by: Literal["insta
                 git: str | os.PathLike[str] | None = None, node_dir: str | os.PathLike[str] | None = None,
                 built_at: str | None = None) -> InstallRecord:
     """A record for ``venv`` (default ``sys.prefix``), stamped with this code's layout and Python version.
-    Paths are made absolute; ``remote``/``branch`` names that the runner would refuse are dropped."""
+    Paths are made absolute; ``remote``/``branch`` names that the runner would refuse are dropped.
+
+    ``venv`` is stored **resolved** (the concrete ``<prefix>/venvs/<id>``, even when this runs through the
+    stable link); ``stable_venv`` is stored as given (it *is* the link)."""
 
     def ab(p: str | os.PathLike[str] | None) -> str | None:
         return os.path.abspath(p) if p is not None else None
@@ -118,7 +121,7 @@ def make_record(*, stable_venv: str | os.PathLike[str], built_by: Literal["insta
         layout=layout_version(), commit=commit, commit_date=commit_date, dirty=dirty,
         branch=branch if branch and is_ref_name(branch) else None,
         remote=remote if remote and is_ref_name(remote) else None,
-        source_dir=ab(source_dir), venv=ab(venv if venv is not None else sys.prefix) or "",
+        source_dir=ab(source_dir), venv=os.path.realpath(venv if venv is not None else sys.prefix),
         stable_venv=ab(stable_venv) or "", built_at=built_at or now_iso(), built_by=built_by, run_id=run_id,
         git=ab(git), node_dir=ab(node_dir), python=".".join(str(x) for x in sys.version_info[:3]))
 
@@ -208,7 +211,21 @@ def build_info(paths: AppPaths | None = None, *, prefix: str | os.PathLike[str] 
 
     Cheap (one small file read, a few stats; no git). ``update_allowed`` is the consent marker now.
     ``prefix`` (default ``sys.prefix``), ``package_dir`` and ``record`` are for tests.
+
+    **Never raises** (it runs for every hello): an unexpected error (e.g. a folder the user can't read;
+    Python 3.11's ``Path.exists()`` raises ``PermissionError``) gives ``source="unknown"`` with the reason.
     """
+    try:
+        return _build_info(paths, prefix=prefix, package_dir=package_dir, record=record)
+    except Exception as exc:  # the hello must go out; unknown is honest
+        reason = f"could not read the install information ({type(exc).__name__}: {exc})"
+        return BuildInfo(version=__version__, os=current_os(), source="unknown", reason=reason,
+                         can_update=False, cannot_update_reason=reason, update_allowed=False)
+
+
+def _build_info(paths: AppPaths | None, *, prefix: str | os.PathLike[str] | None,
+                package_dir: str | os.PathLike[str] | None,
+                record: InstallRecord | EllipsisType | None) -> BuildInfo:
     paths = paths or default_paths()
     venv = Path(prefix if prefix is not None else sys.prefix)
     rec = load(venv) if record is ... else record
@@ -273,4 +290,7 @@ def service_python(record: InstallRecord | None = None) -> Path | None:
     if rec is None or not rec.stable_venv:
         return None
     exe = stable_python(rec.stable_venv)
-    return exe if exe.exists() else None
+    try:
+        return exe if exe.exists() else None
+    except OSError:
+        return None

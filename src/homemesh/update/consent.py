@@ -32,8 +32,13 @@ def marker_path(paths: AppPaths) -> Path:
 
 
 def remote_allowed(paths: AppPaths) -> bool:
-    """Is the marker present right now? (A regular file; a dangling link doesn't count.)"""
-    return marker_path(paths).is_file()
+    """Is the marker present right now? (A regular file; a dangling link doesn't count.) Never raises: a
+    marker that can't be checked (e.g. ``PermissionError``, which Python 3.11's ``is_file()`` re-raises)
+    counts as absent, so remote updates stay off."""
+    try:
+        return marker_path(paths).is_file()
+    except (OSError, ValueError):
+        return False
 
 
 def _who() -> str:
