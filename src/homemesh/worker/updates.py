@@ -104,9 +104,11 @@ class UpdateManager:
         return sum(1 for job_id in self.jobs if job_id not in self.job_ids)
 
     def other_jobs(self) -> list[DrainJob]:
-        """Running jobs other than update jobs, for ``drain.json``."""
+        """Running jobs other than update jobs, for ``drain.json``. Includes a job that is being accepted
+        (in ``job_types`` before its task exists), so nothing can start unseen once draining began."""
+        ids = dict.fromkeys([*self.jobs, *self.job_types])
         return [DrainJob(job_id=job_id, type=self.job_types.get(job_id, "unknown"))
-                for job_id in list(self.jobs) if job_id not in self.job_ids]
+                for job_id in ids if job_id not in self.job_ids]
 
     async def build_info(self) -> BuildInfo:
         """What this process runs (``Hello.build``); remembers the commit for ``agent.json``."""

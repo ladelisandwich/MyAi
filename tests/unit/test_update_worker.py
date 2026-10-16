@@ -454,6 +454,34 @@ async def test_draining_rejects_new_jobs_and_lists_the_running_ones(home, monkey
     assert sent[-1].code == "update_not_allowed"
 
 
+async def test_a_job_accepted_while_the_drain_starts_is_listed_in_drain_json(home, monkeypatch):
+    """The watch loop can run while JobAccepted is being sent; the job must already count as running then,
+    or drain.json says "nothing runs" and the update stops HomeMesh under a job that was just accepted."""
+    _updatable(monkeypatch)
+    cfg = _cfg()
+    cfg.worker.task_types = ["embed"]
+    agent = WorkerAgent(cfg, home, backends={"mock": MockBackend("mock")})
+    drains = []
+
+    async def send(msg):
+        if isinstance(msg, pm.JobAccepted):
+            await agent.updates.refresh()  # one watch step while the accept is on the wire
+            drains.append(files.read_drain_file(home, RUN))
+
+    agent.send = send  # type: ignore[method-assign]
+    agent.updates.send = send
+    _write_run(home, phase="draining")
+    lock = files.update_lock(home)
+    assert lock.acquire()
+    try:
+        await agent._on_dispatch(pm.JobDispatch(job_id="job_e", job_type="embed", priority="interactive",
+                                                payload={"model": "m", "texts": ["x"]}, timeout_s=60))
+    finally:
+        lock.release()
+        await agent._cancel_all_jobs("test over")
+    assert drains and drains[0]["running"] == [{"job_id": "job_e", "type": "embed"}]
+
+
 def test_connection_failures_map_to_agent_states():
     def closed(code):
         return ConnectionClosed(Close(code, "x"), None)

@@ -449,10 +449,16 @@ class WorkerAgent:
             log.info("Rejecting job %s (%s): %s", msg.job_id, msg.job_type, verdict.reason)
             await self.send(pm.JobRejected(job_id=msg.job_id, code=verdict.code, reason=verdict.reason))
             return
-        if msg.job_id in self.jobs:
+        if msg.job_id in self.jobs or msg.job_id in self.job_types:
             return  # duplicate dispatch; already running
-        await self.send(pm.JobAccepted(job_id=msg.job_id))
+        # Registered before the first await: if an update starts draining while JobAccepted is on the wire,
+        # the watch loop must already list this job in drain.json, or the update would stop HomeMesh under it.
         self.job_types[msg.job_id] = msg.job_type
+        try:
+            await self.send(pm.JobAccepted(job_id=msg.job_id))
+        except BaseException:
+            self.job_types.pop(msg.job_id, None)
+            raise
         self.jobs[msg.job_id] = asyncio.create_task(self._run_job(msg), name=f"job-{msg.job_id}")
 
     async def _run_job(self, msg: pm.JobDispatch) -> None:
