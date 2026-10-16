@@ -9,7 +9,7 @@ import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
 import { ApiError, checkHealth, updatesApi } from "../api/client";
 import type { BuildInfo, NodeSummary, NodeUpdate, UpdateCheckResult, UpdateIssue } from "../api/types";
 import {
-  HEALTH_POLL_MS, type HubUpdateRecord, type PanelState, canCheck, clearHubUpdate, formatElapsed, ago, hubUpdateRecord, safeInstallerCommand,
+  HEALTH_POLL_MS, type HubUpdateRecord, type PanelState, activeUpdate, canCheck, clearHubUpdate, formatElapsed, ago, hubUpdateRecord, safeInstallerCommand,
   isBuildInfo, isCommand, isUpdating, nodeOs, panelState, parseTime, phaseLabel, readHubUpdate,
   shortDate, shortSha, splitCode, updatableCheck, updateLogText, writeHubUpdate,
 } from "../lib/update";
@@ -182,7 +182,14 @@ const NEEDS_INSTALLER = new Set(["update_not_supported", "update_needs_installer
 export function UpdatePanel({ node, busyElsewhere, checking = false, requestError, onCheck, onUpdate, onDismiss, now: fixedNow }: UpdatePanelProps) {
   const tick = useNow(isUpdating(node) ? 1000 : 30000);
   const now = fixedNow ?? tick;
-  const s = panelState(node, now, { checking });
+  // The active update's started_at as last reported live: it is gone while the computer is offline mid-restart,
+  // and the elapsed time must not jump to the request time and back.
+  const runStart = useRef<{ id: string; at: string } | null>(null);
+  const act = activeUpdate(node);
+  const lv = node.update_live;
+  if (act && lv && lv.job_id === act.id && lv.started_at) runStart.current = { id: act.id, at: lv.started_at };
+  const runStartedAt = act && runStart.current?.id === act.id ? runStart.current.at : null;
+  const s = panelState(node, now, { checking, runStartedAt });
   const name = node.name;
   const build = isBuildInfo(node.build) ? node.build : null;
   const checkedSuffix = (at: string | null) => {

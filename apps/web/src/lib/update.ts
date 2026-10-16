@@ -235,7 +235,8 @@ function activeStep(phase: string | null): "ready" | "draining" | "restarting" |
 
 /** One state per card, in this order: what runs now beats what is stored; a stored outcome beats an older
  * check; a check beats the advisory consent flag from the hello. */
-export function panelState(n: NodeSummary, now: number, { checking = false } = {}): PanelState {
+export function panelState(n: NodeSummary, now: number,
+  { checking = false, runStartedAt = null }: { checking?: boolean; runStartedAt?: string | null } = {}): PanelState {
   const act = activeUpdate(n);
   if (act) {
     const live = n.update_live && n.update_live.job_id === act.id ? n.update_live : null;
@@ -250,8 +251,10 @@ export function panelState(n: NodeSummary, now: number, { checking = false } = {
       return { kind: "no_word", minutes: Math.floor(silentS / 60), canDismiss: silentS >= DISMISS_AFTER_S };
     }
     const phase = act.phase ?? live?.phase ?? null;
-    // Elapsed counts from the run's start (report.started_at); before the first report, from the request.
-    return { kind: "active", step: activeStep(phase), phase, startedAt: live?.started_at ?? act.requested_at, local: false };
+    // Elapsed counts from the run's start (report.started_at; `runStartedAt` is the one this page saw before
+    // the computer went offline mid-restart and its live report went with it); never seen: from the request.
+    const startedAt = live?.started_at ?? runStartedAt ?? act.requested_at;
+    return { kind: "active", step: activeStep(phase), phase, startedAt, local: false };
   }
   const local = liveLocalRun(n);
   if (local) {

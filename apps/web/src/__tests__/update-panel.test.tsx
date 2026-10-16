@@ -164,6 +164,17 @@ describe("card states (spec 14 table)", () => {
     expect(p.text()).toBe("gaming-pc is restarting · 4:00 elapsed");
   });
 
+  it("keeps counting from the run's start when the restarting computer drops offline", () => {
+    const handlers = { onCheck: vi.fn(), onUpdate: vi.fn(), onDismiss: vi.fn() };
+    const online = node({ update: row({ phase: "stopping" }), update_live: report({ phase: "stopping" }) });
+    const { rerender } = render(<UpdatePanel node={online} now={NOW} {...handlers} />);
+    const state = () => screen.getByTestId("update-panel-n-worker").querySelector(".update-state")?.textContent;
+    expect(state()).toBe("gaming-pc is restarting · 3:12 elapsed");
+    // Offline the hub has no live report; the row's requested_at is 5 minutes ago.
+    rerender(<UpdatePanel node={{ ...online, online: false, update_live: null, update: row({ phase: "switching" }) }} now={NOW + 1000} {...handlers} />);
+    expect(state()).toBe("gaming-pc is restarting · 3:13 elapsed");
+  });
+
   it("the elapsed time keeps counting", () => {
     vi.useFakeTimers({ now: NOW });
     try {
