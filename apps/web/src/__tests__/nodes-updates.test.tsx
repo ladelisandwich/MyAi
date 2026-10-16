@@ -113,7 +113,7 @@ describe("Computers page with updates", () => {
     stubFetch({}); // everything fails: the hub is restarting
     render(<NodesPage />);
     const notice = await screen.findByTestId("hub-update-notice");
-    expect(notice.textContent).toContain("Updating the hub (hub-pc) to b12c3d4.");
+    expect(notice.textContent).toContain("Update of the hub (hub-pc) to b12c3d4, requested just now.");
     expect(notice.textContent).toContain("If that fails, open C:\\Users\\Ann\\AppData\\Local\\HomeMesh\\logs\\update-u20261016115500-0a1b2c3d.log and run the installer:");
     expect([...notice.querySelectorAll("pre")].map((p) => p.textContent)).toEqual([
       "homemesh update status", 'cd "C:\\Users\\Ann\\src\\HomeMesh"; powershell -ExecutionPolicy Bypass -File deploy\\windows\\install.ps1 -Upgrade',
@@ -192,7 +192,16 @@ describe("app start while the hub is down", () => {
     stubFetch({});
     render(<App />);
     expect(await screen.findByText(/Cannot reach the HomeMesh coordinator/)).toBeInTheDocument();
-    expect(screen.getByTestId("hub-update-notice").textContent).toContain("Updating the hub (hub-pc) to b12c3d4.");
+    expect(screen.getByTestId("hub-update-notice").textContent).toContain("Update of the hub (hub-pc) to b12c3d4, requested just now.");
+  });
+
+  it("says when the update was requested: the help is kept for a week", async () => {
+    const threeDaysAgo = Date.now() - 3 * 24 * 3600 * 1000;
+    writeHubUpdate({ ...hubUpdateRecord(hubNode(), hubNode().build as ReturnType<typeof build>, SHA_B, threeDaysAgo), update_id: "job-apply-1" });
+    stubFetch({});
+    render(<App />);
+    expect(await screen.findByTestId("hub-update-notice")).toHaveTextContent("Update of the hub (hub-pc) to b12c3d4, requested 3 d ago.");
+    expect(screen.getByTestId("hub-update-notice").textContent).not.toContain("Updating");
   });
 
   it("shows only the usual error without a saved record", async () => {

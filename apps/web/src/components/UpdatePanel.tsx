@@ -362,10 +362,14 @@ export function useHubUpdateWatch(active: boolean, { reload, intervalMs = HEALTH
 }
 
 export function HubUpdateNotice({ record, down, onHide }: { record: HubUpdateRecord; down: boolean; onHide: () => void }) {
+  // The record outlives the update (until the hub's row shows the outcome, Hide, or a week), so say when it
+  // was requested rather than claim it is still running.
+  const when = ago(record.saved_at, Date.now());
   return (
     <div className="alert warn update-hub-notice" role="status" data-testid="hub-update-notice">
       <div className="row">
-        <strong>Updating the hub ({record.node_name}) to <span className="mono">{shortSha(record.expected_commit)}</span>.</strong>
+        <strong>Update of the hub ({record.node_name}) to <span className="mono">{shortSha(record.expected_commit)}</span>
+          {when ? `, requested ${when}` : ""}.</strong>
         <span className="spacer" />
         <button className="btn ghost sm" onClick={onHide}>Hide</button>
       </div>
