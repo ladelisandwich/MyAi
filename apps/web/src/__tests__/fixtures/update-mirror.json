@@ -1,0 +1,212 @@
+{
+  "_comment": "Generated from homemesh.protocol.update; checked by tests/unit/test_update_web_mirror.py (Python) and src/__tests__/update-lib.test.ts (TypeScript). Regenerate both sides together.",
+  "phases": [
+    "accepted",
+    "prechecks",
+    "building",
+    "draining",
+    "stopping",
+    "switching",
+    "starting",
+    "verifying",
+    "rolling_back",
+    "cleanup"
+  ],
+  "phase_labels": {
+    "accepted": "starting the update",
+    "prechecks": "checking",
+    "building": "building the new version",
+    "draining": "waiting for running jobs",
+    "stopping": "stopping HomeMesh",
+    "switching": "switching versions",
+    "starting": "starting the new version",
+    "verifying": "verifying the new version",
+    "rolling_back": "undoing the update",
+    "cleanup": "cleaning up"
+  },
+  "restart_phases": [
+    "draining",
+    "rolling_back",
+    "starting",
+    "stopping",
+    "switching",
+    "verifying"
+  ],
+  "final_statuses": [
+    "already_up_to_date",
+    "failed",
+    "interrupted",
+    "ok",
+    "ok_unconfirmed",
+    "rolled_back"
+  ],
+  "success_statuses": [
+    "already_up_to_date",
+    "ok",
+    "ok_unconfirmed"
+  ],
+  "active_row_states": [
+    "requested",
+    "running"
+  ],
+  "no_word_after_s": 600.0,
+  "dismiss_after_s": 900.0,
+  "sha_pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$",
+  "run_id_pattern": "^u[0-9]{14}-[0-9a-f]{8}$",
+  "installer_commands": [
+    {
+      "os": "windows",
+      "source_dir": "C:\\Users\\Ann\\src\\HomeMesh",
+      "pull": false,
+      "expected": "cd \"C:\\Users\\Ann\\src\\HomeMesh\"; powershell -ExecutionPolicy Bypass -File deploy\\windows\\install.ps1 -Upgrade"
+    },
+    {
+      "os": "windows",
+      "source_dir": "C:\\Users\\Ann\\src\\HomeMesh",
+      "pull": true,
+      "expected": "cd \"C:\\Users\\Ann\\src\\HomeMesh\"; git pull --ff-only; powershell -ExecutionPolicy Bypass -File deploy\\windows\\install.ps1 -Upgrade"
+    },
+    {
+      "os": "windows",
+      "source_dir": null,
+      "pull": true,
+      "expected": "cd <HomeMesh source folder>; git pull --ff-only; powershell -ExecutionPolicy Bypass -File deploy\\windows\\install.ps1 -Upgrade"
+    },
+    {
+      "os": "windows",
+      "source_dir": null,
+      "pull": false,
+      "expected": "cd <HomeMesh source folder>; powershell -ExecutionPolicy Bypass -File deploy\\windows\\install.ps1 -Upgrade"
+    },
+    {
+      "os": "linux",
+      "source_dir": "/home/ann/src/HomeMesh",
+      "pull": false,
+      "expected": "/home/ann/src/HomeMesh/deploy/linux/install.sh --upgrade"
+    },
+    {
+      "os": "linux",
+      "source_dir": "/home/ann/src/HomeMesh",
+      "pull": true,
+      "expected": "cd /home/ann/src/HomeMesh && git pull --ff-only && ./deploy/linux/install.sh --upgrade"
+    },
+    {
+      "os": "linux",
+      "source_dir": "/home/ann/My Projects/Home'Mesh/",
+      "pull": false,
+      "expected": "'/home/ann/My Projects/Home'\"'\"'Mesh/deploy/linux/install.sh' --upgrade"
+    },
+    {
+      "os": "linux",
+      "source_dir": "/home/ann/My Projects/Home'Mesh",
+      "pull": true,
+      "expected": "cd '/home/ann/My Projects/Home'\"'\"'Mesh' && git pull --ff-only && ./deploy/linux/install.sh --upgrade"
+    },
+    {
+      "os": "linux",
+      "source_dir": null,
+      "pull": true,
+      "expected": "cd <HomeMesh source folder> && git pull --ff-only && ./deploy/linux/install.sh --upgrade"
+    },
+    {
+      "os": "linux",
+      "source_dir": null,
+      "pull": false,
+      "expected": "cd <HomeMesh source folder> && ./deploy/linux/install.sh --upgrade"
+    },
+    {
+      "os": "other",
+      "source_dir": "/opt/hm",
+      "pull": false,
+      "expected": "/opt/hm/deploy/linux/install.sh --upgrade"
+    },
+    {
+      "os": "linux",
+      "source_dir": "",
+      "pull": true,
+      "expected": "cd <HomeMesh source folder> && git pull --ff-only && ./deploy/linux/install.sh --upgrade"
+    },
+    {
+      "os": "linux",
+      "source_dir": "/home/ann/Łódź",
+      "pull": false,
+      "expected": "'/home/ann/Łódź/deploy/linux/install.sh' --upgrade"
+    },
+    {
+      "os": "linux",
+      "source_dir": "/srv/a$b;rm -rf ~",
+      "pull": true,
+      "expected": "cd '/srv/a$b;rm -rf ~' && git pull --ff-only && ./deploy/linux/install.sh --upgrade"
+    },
+    {
+      "os": "other",
+      "source_dir": null,
+      "pull": true,
+      "expected": "cd <HomeMesh source folder> && git pull --ff-only && ./deploy/linux/install.sh --upgrade"
+    }
+  ],
+  "shas": [
+    {
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "is_sha": true,
+      "short": "aaaaaaa"
+    },
+    {
+      "value": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "is_sha": true,
+      "short": "0123456"
+    },
+    {
+      "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "is_sha": false,
+      "short": "AAAAAAA"
+    },
+    {
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "is_sha": false,
+      "short": "aaaaaaa"
+    },
+    {
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "is_sha": false,
+      "short": "aaaaaaa"
+    },
+    {
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+      "is_sha": false,
+      "short": "aaaaaaa"
+    },
+    {
+      "value": "",
+      "is_sha": false,
+      "short": null
+    },
+    {
+      "value": "deadbee",
+      "is_sha": false,
+      "short": "deadbee"
+    }
+  ],
+  "run_ids": [
+    {
+      "value": "u20261016191739-0a1b2c3d",
+      "is_run_id": true
+    },
+    {
+      "value": "u2026101619173-0a1b2c3d",
+      "is_run_id": false
+    },
+    {
+      "value": "u20261016191739-0A1B2C3D",
+      "is_run_id": false
+    },
+    {
+      "value": "x20261016191739-0a1b2c3d",
+      "is_run_id": false
+    },
+    {
+      "value": "u20261016191739-0a1b2c3d\n",
+      "is_run_id": false
+    }
+  ]
+}
