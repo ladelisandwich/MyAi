@@ -89,6 +89,7 @@ class UpdateService:
         jobs.register_handlers("update.apply", JobTypeHandlers(on_completed=self._apply_completed,
                                                                on_failed=self._apply_failed))
         nodes.on_update_report = self.on_update_report
+        nodes.on_node_revoked = self.on_node_revoked
 
     # ------------------------------------------------------------------ helpers
     def check_pending(self, node_id: str) -> str | None:
@@ -400,6 +401,21 @@ class UpdateService:
             await self._audit(node_id, "node.update_finished", node_id, actor_type="node", outcome="failure",
                               details={"update_id": row["id"], "state": "not_started",
                                        "reported_run": report.run_id if report else None})
+            self._publish(node_id)
+
+    # ------------------------------------------------------------------ removed computers
+    async def on_node_revoked(self, node_id: str, actor: str | None) -> None:
+        """A removed computer can never report again, and its card (with Dismiss) is gone: end its active
+        update as ``abandoned`` so it doesn't block updates on every other computer (one active update in the
+        mesh) forever."""
+        self._checks.pop(node_id, None)
+        row = await self.repos.updates.active_for_node(node_id)
+        if row is None:
+            return
+        issue = format_update_error("update_abandoned", computer=await self._name(node_id))
+        if await self.repos.updates.abandon(row["id"], error=issue.message, hint=issue.hint):
+            await self._audit(actor, "node.update_finished", node_id, outcome="failure",
+                              details={"update_id": row["id"], "state": "abandoned", "reason": "computer removed"})
             self._publish(node_id)
 
     # ------------------------------------------------------------------ dismiss

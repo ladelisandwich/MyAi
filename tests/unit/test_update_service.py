@@ -734,6 +734,25 @@ async def test_dismiss_timing(env, monkeypatch):
                                                                                  "failure", "failure"]
 
 
+async def test_removing_a_computer_ends_its_update_so_the_mesh_is_not_blocked(env):
+    """A revoked computer can't report or be dismissed (its card is gone, the service refuses unknown nodes):
+    without this its active row would refuse remote updates on every other computer forever."""
+    pc = await add_node(env, "pc", b=build(), checked=check_result())
+    update_id = await apply_job(env, pc)
+    await env.nodes.revoke(pc, OWNER)
+    row = await env.repos.updates.get(update_id)
+    issue = format_update_error("update_abandoned", computer="pc")
+    assert (row["state"], row["error_code"], row["error"]) == ("abandoned", "update_abandoned", issue.message)
+    assert not row["active"]
+    (done,) = await audit(env, "node.update_finished")
+    assert done["details_json"]["reason"] == "computer removed" and done["actor_id"] == OWNER
+    other = await add_node(env, "laptop", b=build(), checked=check_result())
+    assert (await env.updates.apply(other, SHA_B, False, OWNER))["state"] == "requested"
+    # removing a computer without an update in progress changes nothing
+    await env.nodes.revoke(await add_node(env, "spare", b=build()), OWNER)
+    assert len(await audit(env, "node.update_finished")) == 1
+
+
 async def test_dismiss_counts_from_the_request_when_nothing_was_reported(env, monkeypatch):
     node_id = await add_node(env, "pc", b=build(), checked=check_result(), online=True)
     update_id = await apply_job(env, node_id)

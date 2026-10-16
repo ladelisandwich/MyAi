@@ -127,6 +127,9 @@ class NodeManager:
         self.on_node_disconnected: Callable[[str, str], Awaitable[None]] | None = None
         self.trusted_roots_provider: Callable[[str], Awaitable[list[str]]] | None = None
         self.on_update_report: UpdateReportHandler | None = None
+        # Called with (node_id, actor) after a computer was removed (coordinator/update_service.py ends its
+        # active update: a removed computer can never report again).
+        self.on_node_revoked: Callable[[str, str | None], Awaitable[None]] | None = None
         self._logged_unreadable: set[tuple[str, str]] = set()  # (node_id, "build"|"update"): log once
         self._pending_rotations: dict[str, tuple[str, str]] = {}  # rotation_id -> (node_id, secret_hash)
         self.stopping = False
@@ -508,6 +511,11 @@ class NodeManager:
                                                 fatal=True))
                 await conn.ws.close(code=pm.CLOSE_REVOKED, reason="revoked")
             await self._drop(conn, "revoked by owner")
+        if self.on_node_revoked is not None:
+            try:
+                await self.on_node_revoked(node_id, actor)
+            except Exception:
+                log.exception("Cleaning up after removing computer %s failed", node["name"])
         self.bus.publish("node.revoked", {"node_id": node_id})
 
     async def rotate_credential(self, node_id: str, actor: str | None) -> None:
