@@ -29,6 +29,7 @@ from homemesh.coordinator.api import (
     settings,
     system,
     tools,
+    updates,
     worker_ws,
 )
 from homemesh.coordinator.middleware import BodySizeLimitMiddleware, SecurityHeadersMiddleware
@@ -99,7 +100,7 @@ def create_app(cfg: HomeMeshConfig, paths: AppPaths, *, state: CoordinatorState 
                                        "message": "An unexpected error occurred. See the coordinator log for details."}},
                             status_code=500)
 
-    for r in (auth, system, nodes, models, conversations, memory, knowledge, jobs, tools, settings, events,
+    for r in (auth, system, nodes, updates, models, conversations, memory, knowledge, jobs, tools, settings, events,
               attachments, backups):
         app.include_router(r.router)
     app.include_router(worker_ws.router)

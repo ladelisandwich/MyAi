@@ -30,10 +30,36 @@ class NodeUpdate(BaseModel):
     weight: int | None = Field(default=None, ge=-10, le=10)
 
 
+def _owner_only_paths(out: dict[str, Any], principal: Principal) -> dict[str, Any]:
+    """Folder and log paths of the remote updater (for recovery commands) are shown to the owner only."""
+    if principal.role == "owner":
+        return out
+    if isinstance(out.get("build"), dict):
+        out["build"] = {k: v for k, v in out["build"].items() if k not in ("source_dir", "logs_dir")}
+    for key in ("update", "update_live"):
+        if isinstance(out.get(key), dict):
+            out[key] = {**out[key], "log": None}
+    return out
+
+
+async def summaries(request: Request, rows: list[dict[str, Any]], principal: Principal) -> list[dict[str, Any]]:
+    """Node summaries with the remote-updater fields (``update`` row, ``update_check_pending``)."""
+    st = state(request)
+    if len(rows) == 1:
+        one = await st.repos.updates.latest_for_node(rows[0]["id"])
+        latest = {rows[0]["id"]: one} if one else {}
+    else:
+        latest = await st.repos.updates.latest_by_node() if rows else {}
+    return [_owner_only_paths(st.nodes.node_summary(r, update_row=latest.get(r["id"]),
+                                                    update_check_pending=st.updates.check_pending(r["id"])),
+                              principal)
+            for r in rows]
+
+
 @router.get("")
 async def list_nodes(request: Request, principal: Principal = Depends(require("read"))) -> list[dict[str, Any]]:
     st = state(request)
-    return [st.nodes.node_summary(n) for n in await st.repos.nodes.list()]
+    return await summaries(request, await st.repos.nodes.list(), principal)
 
 
 @router.get("/{node_id}")
@@ -42,7 +68,7 @@ async def get_node(node_id: str, request: Request, principal: Principal = Depend
     row = await st.repos.nodes.get(node_id)
     if not row or row["status"] != "active":
         raise NotFoundError("Node not found.")
-    out = st.nodes.node_summary(row)
+    out = (await summaries(request, [row], principal))[0]
     out["recent_jobs"] = await st.repos.jobs.list(node_id=node_id, limit=20)
     return out
 
@@ -97,7 +123,7 @@ async def update_node(node_id: str, body: NodeUpdate, request: Request,
         await st.repos.audit.add("user", principal.user_id, "node.updated", target_type="node", target_id=node_id,
                                  details=fields)
         st.bus.publish("node.updated", {"node_id": node_id, **fields})
-    return st.nodes.node_summary(await st.repos.nodes.get(node_id))  # type: ignore[arg-type]
+    return (await summaries(request, [await st.repos.nodes.get(node_id)], principal))[0]  # type: ignore[list-item]
 
 
 @router.post("/{node_id}/revoke")

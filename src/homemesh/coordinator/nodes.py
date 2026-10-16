@@ -39,6 +39,7 @@ from homemesh.inference.capabilities import parameter_size_to_billions
 from homemesh.protocol import messages as pm
 from homemesh.protocol.hardware import HardwareReport, Telemetry
 from homemesh.protocol.models import ModelInfo
+from homemesh.protocol.update import UpdateRunReport, parse_build, parse_report
 from homemesh.scheduler.policy import ModelOnNode, NodeSnapshot
 from homemesh.version import SUPPORTED_PROTOCOL_VERSIONS, __version__
 
@@ -46,7 +47,11 @@ log = get_logger(__name__)
 
 HELLO_TIMEOUT_S = 15.0
 PAIRING_TTL_S = 600
+_UNSET: Any = object()
 
+# Called with (node_id, report or None, hello=..., unreadable=...) on every hello and whenever a heartbeat
+# carries a different update report (coordinator/update_service.py).
+UpdateReportHandler = Callable[..., Awaitable[None]]
 
 
 def vram_view(hw: HardwareReport, tel: Telemetry | None) -> tuple[int | None, int | None, bool]:
@@ -83,8 +88,24 @@ class NodeConnection:
     backends: list[dict[str, Any]] = field(default_factory=list)
     # job_id -> (model, MB reserved because the model was not loaded when the job was placed)
     assigned_jobs: dict[str, tuple[str | None, int]] = field(default_factory=dict)
+    # update.check / update.apply jobs among assigned_jobs: tracked like any job, but they never use a
+    # concurrency slot (a 5-minute check must not block chats on a one-slot worker).
+    control_jobs: set[str] = field(default_factory=set)
+    # Latest update run report from Hello.update / Heartbeat.update (local runs too); None = no run reported.
+    update_live: UpdateRunReport | None = None
+    update_unreadable: bool = False  # the worker sent a report this version can't parse
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     closed: bool = False
+
+    @property
+    def busy_jobs(self) -> int:
+        """Jobs that count against the node's concurrency (update jobs excluded)."""
+        return len(self.assigned_jobs.keys() - self.control_jobs)
+
+    @property
+    def updating(self) -> bool:
+        """HomeMesh there is draining, stopping or restarting for an update (protocol.update.RESTART_PHASES)."""
+        return self.update_live is not None and self.update_live.restarting
 
     async def send(self, msg: Any) -> None:
         async with self.send_lock:
@@ -105,6 +126,8 @@ class NodeManager:
         self.on_node_connected: Callable[[str], Awaitable[None]] | None = None
         self.on_node_disconnected: Callable[[str, str], Awaitable[None]] | None = None
         self.trusted_roots_provider: Callable[[str], Awaitable[list[str]]] | None = None
+        self.on_update_report: UpdateReportHandler | None = None
+        self._logged_unreadable: set[tuple[str, str]] = set()  # (node_id, "build"|"update"): log once
         self._pending_rotations: dict[str, tuple[str, str]] = {}  # rotation_id -> (node_id, secret_hash)
         self.stopping = False
 
@@ -275,6 +298,13 @@ class NodeManager:
                 await ws.close(code=pm.CLOSE_PROTOCOL_INCOMPATIBLE, reason="protocol incompatible")
             await self.repos.audit.add("node", node_id, "node.connect", outcome="failure", ip=ip,
                                        details={"reason": "protocol incompatible"})
+            if node_id not in self.connections:
+                # Remembered on the node so its card can say what to do (update it by hand); the prefix is
+                # stable for the web UI. A live connection of the same node (another process) is left alone.
+                await self.repos.nodes.mark_disconnected(
+                    node_id, f"protocol_incompatible: worker supports {list(hello.protocol_versions)[:10]}, "
+                             f"hub supports {list(SUPPORTED_PROTOCOL_VERSIONS)}")
+                self.bus.publish("node.updated", {"node_id": node_id})
             return
 
         node = await self.repos.nodes.get(node_id)
@@ -291,8 +321,10 @@ class NodeManager:
             backends=[b.model_dump() for b in hello.backends], mode=mode,
         )
         await self.repos.nodes.replace_models(node_id, [m.model_dump(mode="json") for m in hello.models])
+        await self.repos.nodes.set_build(node_id, self._build_view(node_id, node["name"], hello.build))
         conn = NodeConnection(node_id=node_id, name=node["name"], ws=ws, protocol_version=version, hello=hello,
                               models=hello.models, backends=[b.model_dump() for b in hello.backends])
+        conn.update_live, conn.update_unreadable = self._read_report(conn, hello.update)
         old = self.connections.get(node_id)
         if old is not None:
             log.warning("Computer %s connected again; closing its older connection (two HomeMesh processes with "
@@ -315,6 +347,7 @@ class NodeManager:
         self.bus.publish("node.connected", {"node_id": node_id, "name": node["name"]})
         if self.on_node_connected:
             await self.on_node_connected(node_id)
+        await self._report_update(conn, hello=True)
         reason = "connection closed"
         try:
             while True:
@@ -355,6 +388,10 @@ class NodeManager:
             await self.repos.nodes.on_heartbeat(conn.node_id, msg.telemetry.model_dump(mode="json"))
             self.bus.publish("node.telemetry", {"node_id": conn.node_id, "telemetry": msg.telemetry.model_dump(),
                                                 "running_jobs": msg.running_jobs, "mode": msg.mode})
+            report, unreadable = self._read_report(conn, msg.update)
+            if report != conn.update_live or unreadable != conn.update_unreadable:
+                conn.update_live, conn.update_unreadable = report, unreadable
+                await self._report_update(conn, hello=False)
         elif isinstance(msg, pm.CapabilitiesUpdate):
             conn.last_heartbeat = time.monotonic()
             conn.models = msg.models
@@ -383,6 +420,43 @@ class NodeManager:
         elif self.on_job_message is not None:
             conn.last_heartbeat = time.monotonic()
             await self.on_job_message(conn.node_id, msg)
+
+    # ------------------------------------------------------------------ remote updater
+    def _log_unreadable_once(self, node_id: str, name: str, kind: str) -> None:
+        if (node_id, kind) not in self._logged_unreadable:
+            self._logged_unreadable.add((node_id, kind))
+            log.warning("Computer %s sent update information (%s) this HomeMesh version can't read; ignoring it "
+                        "(are the hub and that computer on different versions?)", name, kind)
+
+    def _build_view(self, node_id: str, name: str, build: dict[str, Any] | None) -> dict[str, Any] | None:
+        """What to store as ``nodes.build_json``: the parsed BuildInfo, ``{"invalid": true}`` for a value this
+        version can't read, or None for a worker without the updater."""
+        if build is None:
+            return None
+        info = parse_build(build)
+        if info is None:
+            self._log_unreadable_once(node_id, name, "build")
+            return {"invalid": True}
+        return info.model_dump(mode="json")
+
+    def _read_report(self, conn: NodeConnection, value: dict[str, Any] | None) -> tuple[UpdateRunReport | None, bool]:
+        """(report, unreadable) for a Hello.update / Heartbeat.update value. Never raises."""
+        if value is None:
+            return None, False
+        report = parse_report(value)
+        if report is None:
+            self._log_unreadable_once(conn.node_id, conn.name, "update")
+            return None, True
+        return report, False
+
+    async def _report_update(self, conn: NodeConnection, *, hello: bool) -> None:
+        self.bus.publish("node.updated", {"node_id": conn.node_id})
+        if self.on_update_report is None:
+            return
+        try:
+            await self.on_update_report(conn.node_id, conn.update_live, hello=hello, unreadable=conn.update_unreadable)
+        except Exception:
+            log.exception("Handling the update report of %s failed", conn.name)
 
     # ------------------------------------------------------------------ commands
     def get(self, node_id: str) -> NodeConnection | None:
@@ -486,17 +560,24 @@ class NodeManager:
                 node_id=node_id, name=row["name"], online=True, mode=row["mode"],
                 task_types=frozenset(conn.hello.task_types), models=models,
                 heartbeat_age_s=now - conn.last_heartbeat, max_concurrent_jobs=limits.max_concurrent_jobs,
-                running_jobs=len(conn.assigned_jobs), ram_available_mb=ram_avail,
+                running_jobs=conn.busy_jobs, ram_available_mb=ram_avail,
                 ram_reserve_mb=limits.ram_reserve_mb, vram_free_mb=vram_free, vram_total_mb=vram_total,
                 vram_reserve_percent=limits.vram_reserve_percent, has_gpu=has_gpu,
                 allow_cpu_inference=limits.allow_cpu_inference,
                 external_gpu_busy=bool(tel.external_gpu_busy) if tel else False,
-                weight=row.get("weight") or 0, embedded=conn.hello.embedded,
+                weight=row.get("weight") or 0, embedded=conn.hello.embedded, updating=conn.updating,
             ))
         return snaps
 
-    def node_summary(self, row: dict[str, Any]) -> dict[str, Any]:
-        """Public view of a node row merged with live connection data."""
+    def node_summary(self, row: dict[str, Any], *, update_row: Any = _UNSET,
+                     update_check_pending: str | None = None) -> dict[str, Any]:
+        """Public view of a node row merged with live connection data.
+
+        Remote updater fields (docs/API.md): ``build``, ``update_check``, ``update_live`` come from the row and
+        the connection. ``update`` (the node's latest ``node_updates`` row, see :func:`update_view`) and
+        ``update_check_pending`` (job id of a check in flight) need lookups the nodes API does; they are only
+        included when the caller passes ``update_row`` (None = the node has no update), never guessed.
+        """
         conn = self.connections.get(row["id"])
         out = {k: row.get(k) for k in ("id", "name", "status", "embedded", "mode", "weight", "os", "arch", "hostname",
                                        "software_version", "protocol_version", "created_at", "last_connected_at",
@@ -511,4 +592,26 @@ class NodeManager:
         out["heartbeat_age_s"] = round(time.monotonic() - conn.last_heartbeat, 1) if conn else None
         out["allow_remote_mode_change"] = conn.hello.allow_remote_mode_change if conn else None
         out["models"] = [m.model_dump() for m in conn.models] if conn else []
+        out["build"] = row.get("build_json")
+        out["update_check"] = row.get("update_check_json")
+        out["update_live"] = conn.update_live.to_wire() if conn and conn.update_live else None
+        if update_row is not _UNSET:
+            out["update"] = update_view(update_row)
+            out["update_check_pending"] = update_check_pending if conn else None
         return out
+
+
+def update_view(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    """API view of a ``node_updates`` row (``update`` in ``GET /api/v1/nodes``). ``warnings``, ``log`` and
+    ``installed_commit`` come from the last stored report (empty / null before the runner reported)."""
+    if row is None:
+        return None
+    report = row.get("report_json") if isinstance(row.get("report_json"), dict) else {}
+    error = ({"code": row["error_code"], "message": row.get("error") or "", "hint": row.get("hint")}
+             if row.get("error_code") else None)
+    warnings = report.get("warnings") if isinstance(report.get("warnings"), list) else []
+    return {"id": row["id"], "state": row["state"], "phase": row.get("phase"), "run_id": row.get("run_id"),
+            "from_commit": row.get("from_commit"), "expected_commit": row["expected_commit"],
+            "force": bool(row.get("force")), "requested_at": row["requested_at"],
+            "last_report_at": row.get("last_report_at"), "finished_at": row.get("finished_at"), "error": error,
+            "warnings": warnings, "log": report.get("log"), "installed_commit": report.get("installed_commit")}

@@ -8,7 +8,7 @@ so the policy is fully unit-testable and its output is stored with each job to e
 
 Placement steps (in order):
 
-1. node online with a fresh heartbeat
+1. node online with a fresh heartbeat, and not restarting for an update (``updating``, transient)
 2. operating mode / resource profile accepts the job priority
 3. node advertises the task type
 4. node has spare concurrency
@@ -66,6 +66,9 @@ class NodeSnapshot:
     external_gpu_busy: bool = False
     weight: int = 0  # owner preference (-10..10); higher = preferred
     embedded: bool = False
+    # HomeMesh on this node is draining, stopping or restarting for an update (its latest run report is in
+    # protocol.update.RESTART_PHASES). Transient: the node takes work again once the run ends.
+    updating: bool = False
 
 
 @dataclass
@@ -193,6 +196,9 @@ def schedule(req: TaskRequirements, nodes: list[NodeSnapshot], *, heartbeat_time
             continue
         if node.heartbeat_age_s is not None and node.heartbeat_age_s > heartbeat_timeout_s:
             reject("stale_heartbeat", f"no heartbeat for {node.heartbeat_age_s:.0f}s")
+            continue
+        if node.updating:
+            reject("updating", "node is restarting for an update")
             continue
         profile = get_profile(node.mode)
         if node.mode == "paused":

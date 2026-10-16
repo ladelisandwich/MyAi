@@ -1,5 +1,8 @@
 """Integration-test harness: a real coordinator (uvicorn on a free port) and real workers that
 enroll with pairing codes and connect over WebSockets - only the inference backend is mocked.
+
+:class:`SimulatedWorker` is a scripted computer for protocol-level tests (e.g. the remote updater): it enrolls
+and speaks the worker protocol over a real socket, but the test decides every message it sends.
 """
 
 from __future__ import annotations
@@ -13,11 +16,18 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from websockets.asyncio.client import ClientConnection
+from websockets.asyncio.client import connect as ws_connect
+from websockets.exceptions import ConnectionClosed
 
 from homemesh.common.config import BackendConfig, HomeMeshConfig
 from homemesh.common.paths import AppPaths
 from homemesh.inference.mock import MockBackend
+from homemesh.protocol import messages as pm
+from homemesh.protocol.hardware import CPUInfo, HardwareReport, MemoryInfo, OSInfo, Telemetry
+from homemesh.protocol.models import ModelInfo
 from homemesh.runtime import run_roles
+from homemesh.version import SUPPORTED_PROTOCOL_VERSIONS, __version__
 from homemesh.worker.agent import WorkerAgent
 from homemesh.worker.enroll import join
 
@@ -82,6 +92,116 @@ class WorkerHandle:
             await self.task
 
 
+class SimulatedWorker:
+    """A computer that enrolls and speaks the worker protocol over a real socket, but runs no agent: the test
+    scripts what it says (``Hello.build`` / ``Hello.update``, heartbeat reports, answers to jobs).
+
+    Its hardware report is an empty placeholder (hostname ``simulated``) and it offers no task types unless
+    told to, so the scheduler never sends it real work by accident. ``models`` may list mock models (labelled
+    ``mock=True``) to make it a scheduling candidate.
+    """
+
+    def __init__(self, harness: Harness, name: str, node_id: str, secret: str, *, build: dict[str, Any] | None,
+                 update: dict[str, Any] | None, models: list[ModelInfo], task_types: list[str],
+                 os_system: str, heartbeat_s: float) -> None:
+        self.harness, self.name, self.node_id, self.secret = harness, name, node_id, secret
+        self.build, self.report = build, update
+        self.models, self.task_types, self.os_system = models, task_types, os_system
+        self.heartbeat_s = heartbeat_s
+        self.ws: ClientConnection | None = None
+        self.welcome: pm.Welcome | None = None
+        self.dispatches: asyncio.Queue[pm.JobDispatch] = asyncio.Queue()
+        self.cancels: list[pm.JobCancel] = []
+        self.running: list[str] = []  # job ids it says it runs (hello.running_jobs, heartbeats)
+        self._seq = 0
+        self._tasks: list[asyncio.Task[Any]] = []
+
+    def hello(self, protocol_versions: list[int] | None = None) -> pm.Hello:
+        return pm.Hello(
+            node_id=self.node_id, node_name=self.name, software_version=__version__,
+            protocol_versions=protocol_versions or list(SUPPORTED_PROTOCOL_VERSIONS),
+            hardware=HardwareReport(os=OSInfo(system=self.os_system, hostname="simulated"), cpu=CPUInfo(),
+                                    memory=MemoryInfo()),
+            backends=[], models=self.models, task_types=self.task_types, mode="balanced",
+            limits=pm.NodeLimits(max_concurrent_jobs=1), running_jobs=list(self.running), build=self.build,
+            update=self.report)
+
+    async def connect(self, *, protocol_versions: list[int] | None = None) -> pm.Welcome | pm.ErrorMessage:
+        """Open the socket and send the hello. Returns the welcome (then heartbeats run every
+        ``heartbeat_s``) or the coordinator's error message (the socket is closed after it)."""
+        url = self.harness.base_url.replace("http", "ws", 1) + "/api/v1/worker/ws"
+        self.ws = await ws_connect(url, proxy=None, additional_headers={
+            "Authorization": f"{pm.AUTH_SCHEME} {self.node_id}:{self.secret}"})
+        await self.ws.send(pm.dump(self.hello(protocol_versions)))
+        msg = pm.parse_coordinator_message(await asyncio.wait_for(self.ws.recv(), 10))
+        if isinstance(msg, pm.Welcome):
+            self.welcome = msg
+            self._tasks = [asyncio.create_task(self._reader()), asyncio.create_task(self._heartbeats())]
+        return msg
+
+    async def _reader(self) -> None:
+        assert self.ws is not None
+        with contextlib.suppress(ConnectionClosed):
+            async for raw in self.ws:
+                msg = pm.parse_coordinator_message(raw)
+                if isinstance(msg, pm.JobDispatch):
+                    await self.dispatches.put(msg)
+                elif isinstance(msg, pm.JobCancel):
+                    self.cancels.append(msg)
+
+    async def _heartbeats(self) -> None:
+        with contextlib.suppress(ConnectionClosed):
+            while True:
+                await self.heartbeat()
+                await asyncio.sleep(self.heartbeat_s)
+
+    async def heartbeat(self) -> None:
+        self._seq += 1
+        await self.send(pm.Heartbeat(seq=self._seq, telemetry=Telemetry(), running_jobs=list(self.running),
+                                     mode="balanced", update=self.report))
+
+    async def set_report(self, report: dict[str, Any] | None) -> None:
+        """Change the update report and send it in a heartbeat right away."""
+        self.report = report
+        await self.heartbeat()
+
+    async def send(self, msg: Any) -> None:
+        assert self.ws is not None
+        await self.ws.send(pm.dump(msg))
+
+    async def next_dispatch(self, job_type: str | None = None, timeout: float = 10) -> pm.JobDispatch:
+        while True:
+            msg = await asyncio.wait_for(self.dispatches.get(), timeout)
+            if job_type is None or msg.job_type == job_type:
+                return msg
+
+    async def accept(self, job_id: str) -> None:
+        self.running.append(job_id)
+        await self.send(pm.JobAccepted(job_id=job_id))
+
+    async def complete(self, job_id: str, result: dict[str, Any]) -> None:
+        if job_id in self.running:
+            self.running.remove(job_id)
+        await self.send(pm.JobCompleted(job_id=job_id, result=result))
+
+    async def fail(self, job_id: str, code: str, error: str, hint: str | None = None) -> None:
+        if job_id in self.running:
+            self.running.remove(job_id)
+        await self.send(pm.JobFailed(job_id=job_id, code=code, error=error, hint=hint))
+
+    async def disconnect(self) -> None:
+        for t in self._tasks:
+            t.cancel()
+        for t in self._tasks:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await t
+        self._tasks = []
+        if self.ws is not None:
+            with contextlib.suppress(Exception):
+                await self.ws.close()
+            self.ws = None
+
+
 @dataclass
 class Harness:
     root: Path
@@ -90,6 +210,7 @@ class Harness:
     stop_event: asyncio.Event | None = None
     client: httpx.AsyncClient | None = None
     workers: list[WorkerHandle] = field(default_factory=list)
+    simulated: list[SimulatedWorker] = field(default_factory=list)
     cfg: HomeMeshConfig | None = None
 
     @property
@@ -178,6 +299,24 @@ class Harness:
             await self.wait_node_online(creds.node_id)
         return handle
 
+    async def add_simulated_worker(self, name: str, *, build: dict[str, Any] | None = None,
+                                   update: dict[str, Any] | None = None, models: list[ModelInfo] | None = None,
+                                   task_types: list[str] | None = None, os_system: str = "Linux",
+                                   heartbeat_s: float = 0.3, connect: bool = True) -> SimulatedWorker:
+        """Enroll a :class:`SimulatedWorker` with a pairing code and (by default) connect it."""
+        assert self.client is not None
+        r = await self.client.post("/api/v1/nodes/enroll", json={"code": await self.pairing_code(), "name": name})
+        assert r.status_code == 200, r.text
+        creds = r.json()
+        sim = SimulatedWorker(self, name, creds["node_id"], creds["node_secret"], build=build, update=update,
+                              models=models or [], task_types=task_types or [], os_system=os_system,
+                              heartbeat_s=heartbeat_s)
+        self.simulated.append(sim)
+        if connect:
+            welcome = await sim.connect()
+            assert isinstance(welcome, pm.Welcome), welcome
+        return sim
+
     async def nodes(self) -> list[dict[str, Any]]:
         assert self.client is not None
         return (await self.client.get("/api/v1/nodes")).json()
@@ -193,6 +332,9 @@ class Harness:
         for w in self.workers:
             with contextlib.suppress(Exception):
                 await w.stop()
+        for sim in self.simulated:
+            with contextlib.suppress(Exception):
+                await sim.disconnect()
         if self.client is not None:
             await self.client.aclose()
         if self.stop_event is not None:

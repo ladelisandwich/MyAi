@@ -9,8 +9,22 @@ from fastapi import APIRouter, Depends, Request
 from homemesh.common.errors import NotFoundError
 from homemesh.coordinator.api.common import state
 from homemesh.coordinator.auth import Principal, require
+from homemesh.protocol.update import UPDATE_JOB_TYPES
 
 router = APIRouter(prefix="/api/v1/jobs", tags=["jobs"])
+
+
+def redact_update_job(job: dict[str, Any]) -> dict[str, Any]:
+    """``update.*`` rows show a summary only: a check result carries commit subjects, branch and folder names
+    (the owner sees them on the Computers page), an apply result just the run id."""
+    result = job.get("result_json")
+    if not isinstance(result, dict):
+        return job
+    if job["type"] == "update.check":
+        job["result_json"] = {"summary": {k: result.get(k) for k in ("upstream_commit", "behind", "can_update")}}
+    elif job["type"] == "update.apply":
+        job["result_json"] = {"run_id": result.get("run_id")}
+    return job
 
 
 @router.get("")
@@ -50,6 +64,8 @@ async def get_job(job_id: str, request: Request, principal: Principal = Depends(
         p = job["payload_json"]
         job["payload_json"] = {k: p.get(k) for k in ("collection_id", "root_path", "include_globs")} | {
             "known_documents": len(p.get("known") or {})}
+    elif job["type"] in UPDATE_JOB_TYPES:
+        redact_update_job(job)
     job["events"] = await st.repos.jobs.events(job_id)
     node = await st.repos.nodes.get(job["node_id"]) if job.get("node_id") else None
     job["node_name"] = node["name"] if node else None
