@@ -55,6 +55,7 @@ from homemesh.common.proc import run_quiet
 from homemesh.protocol.update import (
     ACCEPT_TIMEOUT_S,
     APPLY_RUNTIME_MAX_S,
+    CHECK_BUSY_PHASE,
     CHECK_TIMEOUT_S,
     ID_MAX,
     UpdateCheckResult,
@@ -485,7 +486,7 @@ def _busy_phase(args: dict[str, Any]) -> str:
         latest = None
     if latest is not None and latest[1].get("status") is None and isinstance(latest[1].get("phase"), str):
         return latest[1]["phase"]
-    return "checking for updates"
+    return CHECK_BUSY_PHASE
 
 
 def _map_exit(handle: RunnerHandle, code: int) -> UpdateLaunchError:

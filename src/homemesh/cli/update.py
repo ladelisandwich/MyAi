@@ -24,6 +24,7 @@ from typing import Any
 from homemesh.common.paths import AppPaths
 from homemesh.protocol.update import (
     ACCEPT_TIMEOUT_S,
+    CHECK_BUSY_PHASE,
     CHECK_TIMEOUT_S,
     PHASE_LABELS,
     BuildInfo,
@@ -40,7 +41,6 @@ from homemesh.update import consent, files, launch, record
 
 EXIT_OK, EXIT_ERROR, EXIT_USAGE = 0, 1, 2
 MAX_SHOWN_COMMITS = 20
-CHECK_BUSY_PHASE = "checking for updates"
 
 
 # --------------------------------------------------------------------------- shared helpers

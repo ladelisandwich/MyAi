@@ -225,7 +225,8 @@ def test_run_json_and_latest_are_readable_by_homemesh(env):
     os.makedirs(run.run_dir, exist_ok=True)
     run.accept()
     data = files.read_run(env.paths, args["run_id"])
-    assert set(files.RunFile.__annotations__) - {"drain_deadline"} <= set(data)
+    later = {"drain_started_at", "first_error", "guard_started"}  # written by later phases, if at all
+    assert set(files.RunFile.__annotations__) - later <= set(data)
     assert files.read_latest_run_id(env.paths) == args["run_id"]
     report = files.report_from_run(data)
     assert report is not None and report.phase == "accepted" and report.status is None

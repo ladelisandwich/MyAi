@@ -468,7 +468,9 @@ class RunFile(TypedDict, total=False):
     to_commit: str | None
     from_venv: str | None
     to_venv: str | None
+    build_dir: str | None  # <prefix>/b/<8 hex> while building (deleted on failure and in cleanup)
     was_running: bool | None
+    drain_started_at: str | None  # the agent's drain.json counts only if its "at" is not older than this
     drain_deadline: str | None
     db_snapshot: str | None
     pre_schema: int | None
@@ -477,9 +479,11 @@ class RunFile(TypedDict, total=False):
     updated_at: str
     finished_at: str | None
     error: dict[str, Any] | None  # {code, message, hint}; the first error stays the run's error
+    first_error: dict[str, Any] | None  # set only when a later error replaced it (e.g. update_rollback_failed)
     warnings: list[dict[str, Any]]  # [{code, message, hint}] <= 10
     log: str  # absolute path of the run log
-    installed_commit: str | None  # written by the agent's finalizer (and may be written by the runner)
+    installed_commit: str | None  # what runs after the run ended (runner; the agent's finalizer for a dead run)
+    guard_started: bool  # the runner's top-level guard started HomeMesh again after an interruption
 
 
 # --------------------------------------------------------------------------- pruning

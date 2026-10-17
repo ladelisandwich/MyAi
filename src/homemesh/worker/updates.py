@@ -40,6 +40,7 @@ from homemesh.common.paths import AppPaths
 from homemesh.protocol import messages as pm
 from homemesh.protocol.update import (
     ACCEPT_TIMEOUT_S,
+    CHECK_BUSY_PHASE,
     CHECK_RATE_LIMIT_S,
     CHECK_TIMEOUT_S,
     MESSAGE_MAX,
@@ -63,7 +64,6 @@ UPDATING_REASON = "this computer is about to restart for an update"
 # The job id is the one string from the hub besides the payload that reaches the runner (args.json, run.json,
 # reports). Coordinator ids are "job_<ulid>"; anything else is refused before it gets near a file.
 JOB_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}")
-CHECK_BUSY_PHASE = "checking for updates"  # update_busy while a check runner holds the update lock
 
 _M = TypeVar("_M", bound=BaseModel)
 

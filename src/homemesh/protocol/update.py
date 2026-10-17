@@ -154,6 +154,9 @@ PHASE_LABELS: dict[str, str] = {
     "rolling_back": "undoing the update",
     "cleanup": "cleaning up",
 }
+# The {phase} of update_busy while a check runner (not an apply) holds the update lock. Worker, launcher, CLI
+# and hub all say it the same way.
+CHECK_BUSY_PHASE = "checking for updates"
 
 # --------------------------------------------------------------------------- text hygiene (9.6)
 

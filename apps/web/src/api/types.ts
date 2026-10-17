@@ -276,6 +276,8 @@ export interface NodeUpdate {
   run_id: string | null;
   from_commit: string | null;
   expected_commit: string;
+  /** The owner chose "Update anyway (stop running jobs)". */
+  force?: boolean;
   requested_at: string;
   last_report_at: string | null;
   finished_at: string | null;

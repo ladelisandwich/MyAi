@@ -35,6 +35,7 @@ from homemesh.coordinator.jobs import JobService, JobSpec, JobTypeHandlers
 from homemesh.coordinator.nodes import NodeManager
 from homemesh.protocol.jobs import TERMINAL_JOB_STATUSES
 from homemesh.protocol.update import (
+    CHECK_BUSY_PHASE,
     DISMISS_AFTER_S,
     SUCCESS_STATUSES,
     UPDATE_ERROR_CODES,
@@ -133,7 +134,7 @@ class UpdateService:
         this node counts as busy too (the check runner there holds the update lock)."""
         node_id, name = node["id"], node["name"]
         if node_id in self._checks:
-            return _conflict(format_update_error("update_busy", computer=name, phase="checking for updates"))
+            return _conflict(format_update_error("update_busy", computer=name, phase=CHECK_BUSY_PHASE))
         active = await (self.repos.updates.get_active() if mesh else self.repos.updates.active_for_node(node_id))
         if active is not None:
             return await self._busy_error(node, active["node_id"], active.get("phase"))
