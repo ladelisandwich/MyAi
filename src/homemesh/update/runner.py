@@ -1885,7 +1885,13 @@ class _Apply(_Run):
             if not _is_link(nxt):
                 raise OSError(errno.EEXIST, "not a link; refusing to replace it", nxt)
             os.unlink(nxt)
-        os.symlink(os.path.relpath(target, os.path.dirname(self.stable)), nxt)
+        rel = os.path.relpath(target, os.path.dirname(self.stable))
+        if self._same(os.path.dirname(target), os.path.join(self.a["prefix"], "venvs")):
+            # Always "venvs/<id>", like the installers: the rollback passes the realpath of the old target,
+            # and where a parent of the prefix is itself a symlink (Bazzite: /home -> var/home) relpath()
+            # would otherwise write "../../../../../var/home/<user>/…/venvs/<id>".
+            rel = os.path.join("venvs", os.path.basename(target))
+        os.symlink(rel, nxt)
         os.replace(nxt, self.stable)
         _fsync_dir(os.path.dirname(self.stable))
 

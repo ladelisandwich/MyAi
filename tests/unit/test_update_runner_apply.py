@@ -509,6 +509,24 @@ def test_rollback_flips_back_and_restarts_the_old_version(env, behavior, code):
     assert env.repo.head() == head  # git untouched on failure
 
 
+def test_rollback_writes_the_link_as_venvs_id_under_a_symlinked_home(tmp_path):
+    """Bazzite's /home is a symlink to var/home. The rollback flips back to the realpath of the old target,
+    and the link must still read ``venvs/<id>`` like the installers write it, not a ../../var/home/… path."""
+    (tmp_path / "var-home").mkdir()
+    home = tmp_path / "home"
+    home.symlink_to(tmp_path / "var-home")
+    layout = Layout(home, Repo(home / "repo"))
+    try:
+        layout.start_homemesh()
+        b = _commit(layout, {"exit_at_start": 3})
+        _, run, phases, _ = _apply(layout, expected=b)
+        assert run["status"] == "rolled_back" and "switching" in phases
+        assert os.readlink(layout.stable) == os.path.join("venvs", layout.old_venv.name)
+        assert layout.running_venv() == os.path.realpath(layout.old_venv)
+    finally:
+        layout.cleanup()
+
+
 def test_unreachable_hub_from_a_worker_keeps_the_new_version_unconfirmed(env):
     env.start_homemesh()
     b = _commit(env, {"agent": "unreachable", "detail": "connection refused"})
