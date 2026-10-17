@@ -17,6 +17,9 @@ Rules:
 * Interactive jobs wait for capacity at most ``server.queue_timeout_s``; jobs that can never
   be placed (model not installed anywhere, missing capability) fail immediately with the
   scheduler's reasons.
+* ``update.check`` / ``update.apply`` (``coordinator/update_service.py``) are placed directly on one
+  node, never queued or requeued, don't count against the node's concurrency (``control_jobs``), and
+  ``update.apply`` can't be cancelled here (the runner on that computer can't be stopped safely midway).
 """
 
 from __future__ import annotations
@@ -29,7 +32,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from homemesh.common.config import HomeMeshConfig
-from homemesh.common.errors import NotFoundError, SchedulingError, ValidationFailed
+from homemesh.common.errors import ConflictError, NotFoundError, SchedulingError, ValidationFailed
 from homemesh.common.ids import new_id
 from homemesh.common.logging import get_logger
 from homemesh.common.timeutil import now_iso
@@ -39,13 +42,20 @@ from homemesh.coordinator.nodes import NodeManager
 from homemesh.protocol import messages as pm
 from homemesh.protocol.jobs import IDEMPOTENT_JOB_TYPES, TERMINAL_JOB_STATUSES, validate_payload
 from homemesh.protocol.models import CAP_COMPLETION, CAP_EMBEDDING
+from homemesh.protocol.update import (
+    APPLY_JOB_TIMEOUT_S,
+    CHECK_JOB_TIMEOUT_S,
+    HINT_MAX,
+    UPDATE_JOB_TYPES,
+    format_update_error,
+)
 from homemesh.scheduler.policy import Candidate, Decision, TaskRequirements, schedule
 
 log = get_logger(__name__)
 
 # Reasons that may clear up by themselves (wait for capacity instead of failing at once).
 TRANSIENT_REJECTIONS = {"at_capacity", "gpu_busy_external", "insufficient_memory", "insufficient_vram",
-                        "stale_heartbeat"}
+                        "stale_heartbeat", "updating"}
 MAX_STREAM_EVENTS = 200_000
 
 
@@ -166,6 +176,10 @@ class JobService:
             "knowledge.scan": 4 * 3600.0,
             "tool.exec": 300.0,
             "model.manage": 6 * 3600.0,
+            # The worker answers a check once the check runner is done (it waits up to 300 s) and an apply
+            # once the runner accepted the run (15 s); the update itself is followed through run reports.
+            "update.check": CHECK_JOB_TIMEOUT_S,
+            "update.apply": APPLY_JOB_TIMEOUT_S,
         }.get(job_type, 600.0)
 
     def register_handlers(self, job_type: str, handlers: JobTypeHandlers) -> None:
@@ -213,6 +227,8 @@ class JobService:
                 row = await self.repos.jobs.get(job_id)
                 if row and row["node_id"] == node_id and row["status"] in ("dispatched", "running"):
                     conn.assigned_jobs[job_id] = (row.get("model"), 0)
+                    if row["type"] in UPDATE_JOB_TYPES:
+                        conn.control_jobs.add(job_id)
                 else:
                     await self.nodes.send(node_id, pm.JobCancel(job_id=job_id, reason="job no longer tracked"))
         self.wake()
@@ -252,6 +268,8 @@ class JobService:
             hint = "Install the model on a worker (Models page or 'ollama pull <model>') or pick another model."
         elif "insufficient_memory" in codes or "insufficient_vram" in codes:
             hint = "Pick a smaller model, free GPU memory, or allow CPU inference on a node."
+        elif "updating" in codes:
+            hint = "A computer is restarting for an update; try again in a minute or two."
         elif waited:
             hint = "All suitable workers stayed busy; try again in a moment."
         elif "paused" in codes:
@@ -260,9 +278,13 @@ class JobService:
 
     # ------------------------------------------------------------------ submission
     async def submit(self, spec: JobSpec, *, placement: Candidate | None = None,
-                     decision: Decision | None = None) -> JobHandle:
+                     decision: Decision | None = None, job_id: str | None = None) -> JobHandle:
         """Create a durable job. With ``placement`` it is dispatched immediately; otherwise it is
-        queued and the dispatcher places it when a suitable node has capacity."""
+        queued and the dispatcher places it when a suitable node has capacity.
+
+        ``job_id`` lets a caller generate the id first (``new_id("job")``) and record it before the job
+        exists, e.g. an update row whose id *is* the ``update.apply`` job id: the worker may answer before
+        this method returns."""
         try:
             validate_payload(spec.type, {**spec.payload, **({"model": spec.payload.get("model") or "pending"}
                                                            if spec.type in ("chat", "embed") else {})})
@@ -272,7 +294,7 @@ class JobService:
             raise SchedulingError("The job queue is full.", code="queue_full",
                                   hint="Wait for queued jobs to finish or cancel some on the Jobs page.")
         idempotent = spec.type in IDEMPOTENT_JOB_TYPES
-        job_id = new_id("job")
+        job_id = job_id or new_id("job")
         await self.repos.jobs.create({
             "id": job_id, "type": spec.type, "priority": spec.priority, "user_id": spec.user_id,
             "conversation_id": spec.conversation_id, "message_id": spec.message_id,
@@ -313,6 +335,8 @@ class JobService:
             return False
         reserved = (cand.estimated_memory_mb or 0) if cand.placement in ("gpu", "partial", "cpu") else 0
         conn.assigned_jobs[job_id] = (cand.model, reserved)
+        if handle.type in UPDATE_JOB_TYPES:
+            conn.control_jobs.add(job_id)  # tracked like any job, but never counted against capacity
         handle.status = "dispatched"
         handle.node_id, handle.node_name = cand.node_id, cand.node_name
         handle.model, handle.backend, handle.backend_type = cand.model, cand.backend, cand.backend_type
@@ -325,6 +349,7 @@ class JobService:
             job_id=job_id, job_type=handle.type, priority=handle.priority, payload=payload, timeout_s=timeout))
         if not sent:
             conn.assigned_jobs.pop(job_id, None)
+            conn.control_jobs.discard(job_id)
             await self.repos.jobs.update(job_id, status="queued", node_id=None)
             return False
         await self.repos.jobs.add_event(job_id, "dispatched", f"sent to {cand.node_name}"
@@ -360,6 +385,7 @@ class JobService:
             conn = self.nodes.get(handle.node_id)
             if conn:
                 conn.assigned_jobs.pop(job_id, None)
+                conn.control_jobs.discard(job_id)
         for t in self._timers.pop(job_id, []):
             if t is not asyncio.current_task():
                 t.cancel()
@@ -367,9 +393,11 @@ class JobService:
 
     async def _finish(self, job_id: str, handle: JobHandle, status: str, *, result: dict[str, Any] | None = None,
                       error: str | None = None, error_code: str | None = None,
-                      metrics: dict[str, Any] | None = None, partial: dict[str, Any] | None = None) -> None:
+                      metrics: dict[str, Any] | None = None, partial: dict[str, Any] | None = None,
+                      hint: str | None = None) -> None:
         if handle.status in TERMINAL_JOB_STATUSES:
             return
+        hint = hint[:HINT_MAX] if hint else None  # worker text, uncapped on the wire
         self._release(job_id, handle)
         handle.status = status
         handle.result, handle.error, handle.error_code, handle.metrics = result, error, error_code, metrics
@@ -378,9 +406,10 @@ class JobService:
             stored_result = {**result, "content": result["content"][:4000]}
         await self.repos.jobs.update(job_id, status=status, result=stored_result, error=error, error_code=error_code,
                                      metrics=metrics, finished_at=now_iso())
-        await self.repos.jobs.add_event(job_id, status, error or status, level="error" if status == "failed" else "info")
+        await self.repos.jobs.add_event(job_id, status, error or status, {"hint": hint} if hint else None,
+                                        level="error" if status == "failed" else "info")
         handle.push({"type": status, "result": result, "error": error, "error_code": error_code,
-                     "metrics": metrics, "partial": partial})
+                     "metrics": metrics, "partial": partial, "hint": hint})
         handle.done.set()
         self.bus.publish("job.updated", {"job_id": job_id, "status": status, "error_code": error_code})
         h = self.handlers.get(handle.type)
@@ -390,7 +419,8 @@ class JobService:
                 if status == "completed" and h.on_completed:
                     await h.on_completed(row, result)
                 elif status in ("failed", "cancelled", "interrupted") and h.on_failed:
-                    await h.on_failed(row, {"status": status, "error": error, "error_code": error_code})
+                    await h.on_failed(row, {"status": status, "error": error, "error_code": error_code,
+                                            "hint": hint})
             except Exception:
                 log.exception("Job handler for %s failed", handle.type)
         # Keep finished handles briefly for late readers, then forget them.
@@ -445,6 +475,8 @@ class JobService:
 
     async def _dispatch_queued(self) -> None:
         for row in await self.repos.jobs.queued(limit=200):
+            if row["type"] in UPDATE_JOB_TYPES:
+                continue  # placed directly by UpdateService, never through the queue (a failed send ends it)
             handle = self.handles.get(row["id"])
             if handle is None:
                 handle = JobHandle(job_id=row["id"], type=row["type"], priority=row["priority"],
@@ -520,7 +552,8 @@ class JobService:
                     and row["attempts"] < row["max_attempts"]):
                 await self._handle_lost(job_id, handle, msg.code, msg.error)
             else:
-                await self._finish(job_id, handle, "failed", error_code=msg.code, error=msg.error, partial=msg.partial)
+                await self._finish(job_id, handle, "failed", error_code=msg.code, error=msg.error, partial=msg.partial,
+                                   hint=msg.hint)
         elif isinstance(msg, pm.JobCancelled):
             await self._finish(job_id, handle, "cancelled", error_code="cancelled", error="Cancelled.",
                                partial=msg.partial)
@@ -545,6 +578,11 @@ class JobService:
         row = await self.repos.jobs.get(job_id)
         if not row:
             raise NotFoundError("Job not found.")
+        if row["type"] == "update.apply":
+            # Once launched, the runner on that computer must finish or roll back by itself; stopping it
+            # halfway could leave HomeMesh stopped. (update.check may be cancelled: the worker kills it.)
+            issue = format_update_error("update_not_cancellable")
+            raise ConflictError(issue.message, code=issue.code, hint=issue.hint)
         handle = self.handles.get(job_id) or JobHandle(job_id=job_id, type=row["type"], priority=row["priority"],
                                                        status=row["status"], node_id=row.get("node_id"))
         self.handles[job_id] = handle

@@ -25,6 +25,7 @@ from homemesh.coordinator.model_registry import ModelRegistry
 from homemesh.coordinator.nodes import NodeManager
 from homemesh.coordinator.settings_service import SettingsService
 from homemesh.coordinator.tool_service import ToolService
+from homemesh.coordinator.update_service import UpdateService
 
 log = get_logger(__name__)
 
@@ -50,6 +51,7 @@ class CoordinatorState:
         self.settings = SettingsService(self.repos, self.bus)
         self.nodes = NodeManager(cfg, paths, self.repos, self.bus)
         self.jobs = JobService(cfg, self.repos, self.nodes, self.bus)
+        self.updates = UpdateService(self.repos, self.nodes, self.jobs, self.bus)
         self.models = ModelRegistry(self.repos, self.nodes, self.settings, allow_mock=cfg.inference.mock_enabled,
                                     allow_remote=cfg.cloud.enabled)
         self.embeddings = EmbeddingService(self.repos, self.jobs, self.models, cfg.knowledge.embed_batch_size)

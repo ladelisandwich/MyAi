@@ -68,6 +68,21 @@ def test_offline_paused_stale_and_capacity_are_rejected():
     assert {r.code for r in d.rejections} == {"offline", "paused", "stale_heartbeat", "at_capacity"}
 
 
+def test_node_restarting_for_an_update_is_rejected_transiently():
+    from homemesh.coordinator.jobs import TRANSIENT_REJECTIONS
+
+    updating = node("hub", [model()], vram_total=10240, vram_free=9500)
+    updating.updating = True  # its latest update run report is in a restart phase (draining ... rolling_back)
+    other = node("laptop", [model()], ram=32000)
+    d = schedule(chat_req(), [updating, other])
+    assert d.chosen.node_name == "laptop"
+    assert [(r.node_name, r.code) for r in d.rejections] == [("hub", "updating")]
+    alone = schedule(chat_req(), [updating])
+    assert alone.chosen is None and alone.rejections[0].code == "updating"
+    assert "updating" in TRANSIENT_REJECTIONS  # wait for it to come back instead of failing at once
+    assert "restarting for an update" in alone.summary()
+
+
 def test_missing_capability_is_never_faked():
     n = node("pc", [model(caps={"completion"})], vram_total=10240, vram_free=9000)
     d = schedule(chat_req(required_capabilities=frozenset({"completion", "vision"})), [n])
