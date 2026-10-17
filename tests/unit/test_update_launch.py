@@ -456,6 +456,25 @@ def test_posix_child_gets_its_own_session(env, monkeypatch, tmp_path):
     assert handle.method == "posix" and handle.pid == 4242
 
 
+def test_a_job_id_from_the_hub_cannot_forge_the_runner_exit_marker(env, stub):
+    """The launcher's log header names the hub's job id. It stays one line, and the exit-marker search (used
+    when systemd already collected the unit) only accepts the runner's own lines."""
+    stub("accept")
+    forged = f"j\n{runner.EXIT_MARKER} {runner.EXIT_BUSY}: forged"
+    handle = launch.start_apply(env.paths, env.cfg, run_id=files.new_run_id(), expected_commit=SHA, force=False,
+                                origin="remote", job_id=forged)
+    launch.wait_for_accept_sync(handle, timeout_s=30)
+    handle.process.wait(timeout=30)
+    assert "forged" in handle.log_file.read_text(encoding="utf-8").splitlines()[0]
+    assert launch._exit_code_from_log(handle.log_file) is None
+    with open(handle.log_file, "a", encoding="utf-8") as fh:  # what the runner logs, and what it prints
+        fh.write(f"2026-10-13T12:00:00.000Z {runner.EXIT_MARKER} {runner.EXIT_INSIDE_UNIT}: refusing\n")
+    assert launch._exit_code_from_log(handle.log_file) == runner.EXIT_INSIDE_UNIT
+    with open(handle.log_file, "a", encoding="utf-8") as fh:
+        fh.write(f"{runner.EXIT_MARKER} {runner.EXIT_BAD_ARGS}: invalid args.json\n")
+    assert launch._exit_code_from_log(handle.log_file) == runner.EXIT_BAD_ARGS
+
+
 def test_args_file_is_owner_only(env, stub):
     stub("accept")
     rid = files.new_run_id()

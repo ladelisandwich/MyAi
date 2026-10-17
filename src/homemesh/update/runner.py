@@ -34,8 +34,8 @@ process spawning, timeouts), so tests can run the whole apply flow on Linux with
 network: ``run_apply(args, hooks)``. In production ``main()`` passes no hooks.
 
 Exit codes are the ``EXIT_*`` constants below; ``launch.wait_for_accept`` / ``wait_for_check`` map them to
-error codes when the runner exits without a result file (the runner also prints ``EXIT_MARKER <code>`` to
-stderr, because systemd forgets a collected unit's exit status).
+error codes when the runner exits without a result file (the runner also writes ``EXIT_MARKER <code>`` into
+its log, because systemd forgets a collected unit's exit status).
 """
 
 from __future__ import annotations
@@ -73,8 +73,9 @@ EXIT_NO_BASE_PYTHON = 5  # not the base interpreter (update_no_base_python): not
 
 MODES = ("check", "apply")
 
-# Printed to stderr (= the runner log) on every early exit; launch.py reads it when systemd already
-# garbage-collected the unit (``--collect``) and its exit status is gone.
+# Written into the runner log (stderr only when the log can't be written) on every early exit, at the start
+# of a line or after the log's timestamp; launch.py reads it when systemd already garbage-collected the unit
+# (``--collect``) and its exit status is gone.
 EXIT_MARKER = "homemesh-update-runner-exit"
 
 
@@ -1159,7 +1160,8 @@ class _Run:
     def t(self, name: str) -> float:
         return float(self.h.timeouts.get(name, TIMEOUTS[name]))
 
-    def log(self, text: str) -> None:
+    def log(self, text: str) -> bool:
+        """Append redacted, timestamped lines to the run log. False if the log can't be written."""
         stamp = now_iso()
         lines = text.splitlines() or [""]
         out = "".join(f"{stamp} {clean_line(redact(line), 4000)}\n" for line in lines)
@@ -1168,7 +1170,8 @@ class _Run:
             with os.fdopen(fd, "ab") as fh:
                 fh.write(out.encode("utf-8", "replace"))
         except OSError:
-            pass
+            return False
+        return True
 
     def _log_output(self, text: str) -> None:
         self.log("\n".join("  | " + line for line in text.splitlines()))
@@ -1189,8 +1192,12 @@ class _Run:
             return False
 
     def early_exit(self, code: int, reason: str) -> int:
-        self.log(f"{EXIT_MARKER} {code}: {reason}")
-        print(f"{EXIT_MARKER} {code}: {reason}", file=sys.stderr, flush=True)
+        # stderr only if the log can't be written: every launch method makes stderr this same log, and on
+        # Windows that inherited handle has its own file position (the end of the launcher's header; there
+        # is no kernel-level append for it), so a second copy written through it would overwrite the lines
+        # logged since.
+        if not self.log(f"{EXIT_MARKER} {code}: {reason}"):
+            print(f"{EXIT_MARKER} {code}: {reason}", file=sys.stderr, flush=True)
         return code
 
     # ----------------------------------------------------------------- environments (design 9.1)

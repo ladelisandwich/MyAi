@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from homemesh.protocol.update import UpdateCheckResult, installer_command
-from homemesh.update import consent, files, runner
+from homemesh.update import consent, files, launch, runner
 from update_support import Layout, Repo, git
 
 
@@ -412,6 +412,27 @@ def test_runner_refuses_a_venv_interpreter(env):
                           check=False)
     assert proc.returncode == runner.EXIT_NO_BASE_PYTHON
     assert files.read_json(args["out"]) is None
+
+
+def test_an_early_exit_writes_its_marker_into_the_log_once_and_intact(env):
+    """stderr is the log too. On Windows that inherited handle keeps its own file position, so a second copy
+    of the marker written through it would land on top of the lines logged before it."""
+    args = env.args("check")
+    lock = files.update_lock(env.paths)
+    assert lock.acquire()
+    try:
+        with files.open_private_append(Path(args["log"])) as log:
+            proc = subprocess.run([_base_python(), "-I", "-S", "-X", "utf8", runner.__file__, "check", "--args",
+                                   str(files.check_args_file(env.paths, args["run_id"]))], stdout=log, stderr=log,
+                                  timeout=60, check=False,
+                                  env={k: v for k, v in os.environ.items() if not k.startswith("PYTHON")})
+    finally:
+        lock.release()
+    assert proc.returncode == runner.EXIT_BUSY
+    text = Path(args["log"]).read_text(encoding="utf-8")
+    assert text.count(runner.EXIT_MARKER) == 1, text
+    assert f"{runner.EXIT_MARKER} {runner.EXIT_BUSY}: another update or check is running (update.lock is held)\n" in text
+    assert launch._exit_code_from_log(Path(args["log"])) == runner.EXIT_BUSY
 
 
 def test_invalid_args_file_exits_2_and_writes_nothing(env, tmp_path):

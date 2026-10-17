@@ -56,8 +56,10 @@ from homemesh.protocol.update import (
     ACCEPT_TIMEOUT_S,
     APPLY_RUNTIME_MAX_S,
     CHECK_TIMEOUT_S,
+    ID_MAX,
     UpdateCheckResult,
     UpdateOrigin,
+    clean_line,
     clean_text,
     format_update_error,
     installer_command,
@@ -79,7 +81,9 @@ SERVICE_UNIT = "homemesh.service"
 CGROUP_FILE = "/proc/self/cgroup"  # read by inside_homemesh_unit(); tests point it elsewhere
 _DROP_EXACT = frozenset({"__PYVENV_LAUNCHER__", "HOMEMESH_DETACHED", "SSH_ASKPASS"})
 _DROP_PREFIXES = ("PYTHON", "VSCODE_", "GIT_")
-_EXIT_MARKER_RE = re.compile(re.escape(_runner.EXIT_MARKER) + r" (-?[0-9]+)")
+# The runner's marker: at the start of a line (printed) or after the log timestamp (logged). Anchored, so the
+# launcher's own header line (which names the job) can never be read as one.
+_EXIT_MARKER_RE = re.compile(r"^(?:\S+ )?" + re.escape(_runner.EXIT_MARKER) + r" (-?[0-9]+)\b", re.MULTILINE)
 
 CREATE_NO_WINDOW = _runner.CREATE_NO_WINDOW
 CREATE_NEW_PROCESS_GROUP = _runner.CREATE_NEW_PROCESS_GROUP
@@ -367,7 +371,8 @@ def _launch(paths: AppPaths, args: files.RunnerArgs, *, foreground: bool) -> Run
     log_file = Path(args["log"])
     try:
         with files.open_private_append(log_file) as fh:
-            fh.write(f"{'=' * 20} HomeMesh update {mode} {run_id} (job {args['job_id']}, "
+            job = clean_line(str(args["job_id"]), ID_MAX)  # from the hub: one line, whatever it holds
+            fh.write(f"{'=' * 20} HomeMesh update {mode} {run_id} (job {job}, "
                      f"origin {args['origin']}) {'=' * 20}\n".encode())
     except OSError as exc:
         raise _error("update_launch_failed", detail=f"creating the log {log_file} failed: {exc}") from exc
