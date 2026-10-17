@@ -148,10 +148,14 @@ def test_resolve_git(monkeypatch, tmp_path):
 def test_log_tail_is_redacted_and_never_raises(tmp_path):
     log = tmp_path / "x.log"
     log.write_bytes(b"".join(f"line {i}\n".encode() for i in range(50))
-                    + b"push https://me:ghp_tokentoken@github.com/a/b \xff\x1b[31m\n")
-    tail = launch.log_tail(log, lines=3)
+                    + b"push https://me:ghp_tokentoken@github.com/a/b \xff\x1b[31m\n"
+                    + b"  | fatal: unable to access 'https://github.com/me/private.git/': Could not resolve host\n"
+                    + b"  | fatal: 'git@github.com:me/private.git' does not appear to be a git repository\n")
+    tail = launch.log_tail(log, lines=5)
     assert tail.splitlines()[:2] == ["line 48", "line 49"]
-    assert "ghp_" not in tail and "me:" not in tail and "\x1b" not in tail and "://***@" in tail
+    assert "ghp_" not in tail and "me:" not in tail and "\x1b" not in tail
+    assert "github.com/" not in tail and "github.com:" not in tail and "private.git" not in tail
+    assert "unable to access '<remote address>': Could not resolve host" in tail
     assert launch.log_tail(tmp_path / "missing.log") == ""
 
 

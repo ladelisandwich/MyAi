@@ -249,13 +249,16 @@ def resolve_git(record_git: str | None) -> Path:
 
 
 def log_tail(path: Path, lines: int = 20) -> str:
-    """The last ``lines`` lines of a runner log, decoded leniently and redacted. Never raises ("" if none)."""
+    """The last ``lines`` lines of a runner log, decoded leniently and redacted, with remote addresses masked
+    (design 9.6: the hub learns a remote's name, never its URL; a check log holds git's own messages, and this
+    tail travels with the error). Never raises ("" if none)."""
     try:
         with open(path, "rb") as fh:
             fh.seek(0, os.SEEK_END)
             fh.seek(max(0, fh.tell() - 65536))
             raw = fh.read()
         text = clean_text(redact(raw.decode("utf-8", "replace")), 1 << 20)
+        text = _runner._REMOTE_ADDRESS.sub("<remote address>", text)
         kept = [ln for ln in text.splitlines() if ln.strip()]
         return "\n".join(kept[-lines:]) if lines > 0 else ""
     except Exception:
