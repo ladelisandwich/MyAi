@@ -196,7 +196,7 @@ fi
 
 # Keep the folder the link points at and the one it pointed at before (to go back to; else the newest
 # other one); remove older ones. Only real folders with generated names are touched.
-if [ "$SWITCHED" = 1 ] && [ -d "$VENVS" ]; then
+if [ "$SWITCHED" = 1 ] && [ -d "$VENVS" ] && [ ! -L "$VENVS" ]; then
   TARGET="$(readlink -- "$VENV")"; TARGET="${TARGET##*/}"
   KEEP=""; KEEP_TS=""
   if [ -n "$PREV" ] && [ "$PREV" != "$TARGET" ] && [ -d "$VENVS/$PREV" ] && [[ "$PREV" =~ $ID_RE ]]; then
