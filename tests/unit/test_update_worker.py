@@ -643,7 +643,7 @@ class SlowModelsBackend(MockBackend):
     """Model listing as slow as an Ollama that was just started with the computer."""
 
     async def list_models(self):
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(3.0)
         return await super().list_models()
 
 
@@ -655,7 +655,7 @@ async def test_a_slow_model_list_does_not_make_the_hub_refuse_the_hello(tmp_path
     from homemesh.coordinator import nodes
     from homemesh.worker.enroll import join
 
-    monkeypatch.setattr(nodes, "HELLO_TIMEOUT_S", 0.5)  # instead of 15 s; the models take 1 s here
+    monkeypatch.setattr(nodes, "HELLO_TIMEOUT_S", 1.5)  # instead of 15 s; the models take 3 s here
     h = Harness(tmp_path)
     await h.start(roles=["coordinator"])
     try:
