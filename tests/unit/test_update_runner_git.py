@@ -379,6 +379,9 @@ def test_http_401_is_auth_failed_and_no_askpass_runs(env, tmp_path, monkeypatch)
         monkeypatch.setenv("DISPLAY", ":0")
         url = f"http://127.0.0.1:{server.server_address[1]}/homemesh.git"
         git("-C", str(env.repo.src), "remote", "set-url", "origin", url)
+        # core.askPass (config, not environment) is used when GIT_ASKPASS is unset, but not when it is set
+        # and empty: this is what makes the runner's GIT_ASKPASS="" matter.
+        git("-C", str(env.repo.src), "config", "core.askPass", str(askpass))
         data, _ = _check(env)
         assert data["error"]["code"] == "update_auth_failed", data
         assert not marker.exists(), "an askpass helper was run"
