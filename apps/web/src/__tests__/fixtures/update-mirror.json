@@ -51,6 +51,7 @@
   ],
   "no_word_after_s": 600.0,
   "dismiss_after_s": 900.0,
+  "path_max": 260,
   "sha_pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$",
   "run_id_pattern": "^u[0-9]{14}-[0-9a-f]{8}$",
   "installer_commands": [

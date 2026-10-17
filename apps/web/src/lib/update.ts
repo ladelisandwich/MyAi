@@ -37,6 +37,9 @@ export const NO_WORD_AFTER_S = 600; // "No word from <name> for N min"
 export const DISMISS_AFTER_S = 900; // Dismiss allowed after 15 minutes without a report
 export const HEALTH_POLL_MS = 3000; // while the hub restarts
 
+/** protocol.update.PATH_MAX: the hub keeps the first 260 characters of a reported path, silently. */
+export const PATH_MAX = 260;
+
 export const SHA_PATTERN = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
 export const RUN_ID_PATTERN = /^u[0-9]{14}-[0-9a-f]{8}$/;
 
@@ -93,9 +96,10 @@ const POWERSHELL_SPECIAL = /["`$[\]“-„]/;
 /** The reported source folder if a command built from it does exactly what it shows, else null (the command
  * then says `<HomeMesh source folder>`). The folder comes from that computer's hello, i.e. from another
  * computer; installerCommand() shell-quotes it for sh, but its Windows form is `cd "<folder>"` (as in Python),
- * so anything PowerShell interprets there is refused, and on every OS so are hidden or bidi characters. */
+ * so anything PowerShell interprets there is refused, and on every OS so are hidden or bidi characters and a
+ * folder as long as the cap on reported paths (it may have been cut short: a command for another folder). */
 export function commandSourceDir(osName: string | null | undefined, sourceDir: string | null | undefined): string | null {
-  if (!sourceDir || HIDDEN_CHARS.test(sourceDir)) return null;
+  if (!sourceDir || HIDDEN_CHARS.test(sourceDir) || [...sourceDir].length >= PATH_MAX) return null;
   if (osName === "windows" && POWERSHELL_SPECIAL.test(sourceDir)) return null;
   return sourceDir;
 }

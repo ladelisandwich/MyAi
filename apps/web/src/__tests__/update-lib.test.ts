@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import type { NodeSummary } from "../api/types";
 import {
-  ACTIVE_ROW_STATES, DISMISS_AFTER_S, FINAL_STATUSES, HUB_UPDATE_KEY, NO_WORD_AFTER_S, PHASES, PHASE_LABELS, RESTART_PHASES,
+  ACTIVE_ROW_STATES, DISMISS_AFTER_S, FINAL_STATUSES, HUB_UPDATE_KEY, NO_WORD_AFTER_S, PATH_MAX, PHASES, PHASE_LABELS, RESTART_PHASES,
   RUN_ID_PATTERN, SHA_PATTERN, SUCCESS_STATUSES, ago, canCheck, clearHubUpdate, commandSourceDir, formatElapsed, hubUpdateRecord,
   installerCommand, isCommand, isRunId, isSha, panelState, phaseLabel, readHubUpdate, reconcileHubUpdate, safeInstallerCommand, shQuote, shortDate,
   shortSha, splitCode, updatableCheck, updateLogText, writeHubUpdate,
@@ -14,7 +14,7 @@ import { MIN, NOW, SHA_B, build, hubNode, iso, node, report, result, row, stored
 // The same fixture is checked against homemesh.protocol.update by tests/unit/test_update_web_mirror.py.
 const mirror = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "fixtures", "update-mirror.json"), "utf-8")) as {
   phases: string[]; phase_labels: Record<string, string>; restart_phases: string[]; final_statuses: string[];
-  success_statuses: string[]; active_row_states: string[]; no_word_after_s: number; dismiss_after_s: number;
+  success_statuses: string[]; active_row_states: string[]; no_word_after_s: number; dismiss_after_s: number; path_max: number;
   sha_pattern: string; run_id_pattern: string;
   installer_commands: { os: string; source_dir: string | null; pull: boolean; expected: string }[];
   shas: { value: string; is_sha: boolean; short: string | null }[];
@@ -31,6 +31,7 @@ describe("mirrors of protocol/update.py", () => {
     expect([...ACTIVE_ROW_STATES].sort()).toEqual(mirror.active_row_states);
     expect(NO_WORD_AFTER_S).toBe(mirror.no_word_after_s);
     expect(DISMISS_AFTER_S).toBe(mirror.dismiss_after_s);
+    expect(PATH_MAX).toBe(mirror.path_max);
     expect(SHA_PATTERN.source).toBe(mirror.sha_pattern);
     expect(RUN_ID_PATTERN.source).toBe(mirror.run_id_pattern);
   });
@@ -93,6 +94,15 @@ describe("commands built from a reported source folder", () => {
       expect(commandSourceDir("windows", `C:\\src${ch}\\HomeMesh`)).toBeNull();
     }
     expect(safeInstallerCommand("linux", "/home/ann/\u202esrc")).toBe("cd <HomeMesh source folder> && ./deploy/linux/install.sh --upgrade");
+  });
+  it("never builds a command from a folder that may have been cut at the hub's cap on paths", () => {
+    const long = `/home/ann/${"d".repeat(PATH_MAX - 10)}`; // exactly PATH_MAX characters: possibly truncated
+    expect(commandSourceDir("linux", long)).toBeNull();
+    expect(commandSourceDir("linux", long.slice(0, -1))).toBe(long.slice(0, -1));
+    // Python caps code points, not UTF-16 units: a 259-character folder of astral characters was kept whole.
+    const astral = `C:\\${"\u{1D538}".repeat(PATH_MAX - 4)}`;
+    expect(commandSourceDir("windows", astral)).toBe(astral);
+    expect(commandSourceDir("windows", `${astral}x`)).toBeNull();
   });
   it("is the mirrored installer command otherwise", () => {
     for (const c of mirror.installer_commands) {

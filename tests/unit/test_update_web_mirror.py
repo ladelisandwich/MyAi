@@ -34,6 +34,7 @@ def test_vocabularies_match(mirror: dict) -> None:
     assert set(mirror["active_row_states"]) == set(u.ACTIVE_ROW_STATES)
     assert mirror["no_word_after_s"] == u.NO_WORD_AFTER_S
     assert mirror["dismiss_after_s"] == u.DISMISS_AFTER_S
+    assert mirror["path_max"] == u.PATH_MAX
     assert mirror["sha_pattern"] == u.SHA_PATTERN
     assert mirror["run_id_pattern"] == u.RUN_ID_PATTERN
 
