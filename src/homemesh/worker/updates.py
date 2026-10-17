@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 import threading
 import time
 from collections.abc import Awaitable, Callable
@@ -59,6 +60,9 @@ from homemesh.update.files import AgentState, DrainJob
 log = get_logger(__name__)
 
 UPDATING_REASON = "this computer is about to restart for an update"
+# The job id is the one string from the hub besides the payload that reaches the runner (args.json, run.json,
+# reports). Coordinator ids are "job_<ulid>"; anything else is refused before it gets near a file.
+JOB_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}")
 CHECK_BUSY_PHASE = "checking for updates"  # update_busy while a check runner holds the update lock
 
 _M = TypeVar("_M", bound=BaseModel)
@@ -172,7 +176,11 @@ class UpdateManager:
             await self.send(reply)
 
     # ------------------------------------------------------------------ gates
-    def _validate(self, model: type[_M], payload: dict[str, Any]) -> _M:
+    def _validate(self, model: type[_M], msg: pm.JobDispatch) -> _M:
+        if not JOB_ID_RE.fullmatch(msg.job_id):
+            log.warning("Invalid update job id %r", msg.job_id[:120])
+            raise UpdateRefused(format_update_error("update_invalid_request", computer=self.computer))
+        payload = msg.payload
         try:
             return model.model_validate(payload)
         except ValidationError as exc:
@@ -236,7 +244,7 @@ class UpdateManager:
 
     # ------------------------------------------------------------------ update.check (7.2)
     async def _check(self, msg: pm.JobDispatch) -> dict[str, Any]:
-        self._validate(UpdateCheckPayload, msg.payload)
+        self._validate(UpdateCheckPayload, msg)
         await asyncio.to_thread(self._gate)
         now = time.monotonic()
         if self._last_check_launch is not None and now - self._last_check_launch < CHECK_RATE_LIMIT_S:
@@ -267,7 +275,7 @@ class UpdateManager:
 
     # ------------------------------------------------------------------ update.apply (7.3)
     async def _apply(self, msg: pm.JobDispatch) -> dict[str, Any]:
-        payload = self._validate(UpdateApplyPayload, msg.payload)
+        payload = self._validate(UpdateApplyPayload, msg)
         await asyncio.to_thread(self._gate)
         latest = await asyncio.to_thread(files.read_latest_run, self.paths)
         if (latest is not None and latest[1].get("status") == "rolled_back"

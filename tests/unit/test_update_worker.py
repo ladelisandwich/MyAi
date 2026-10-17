@@ -172,6 +172,22 @@ async def test_malformed_payloads_are_accepted_then_failed(home, fake, monkeypat
     assert fake.calls == [], "nothing may be started for a malformed request"
 
 
+async def test_a_job_id_unfit_for_files_is_refused(home, fake, monkeypatch):
+    """The job id goes from the hub into args.json and run.json; only plain ids get that far."""
+    _updatable(monkeypatch)
+    consent.allow(home)
+    for job_id in ("../../x", "job\n1", "-job", "j" * 101, "job 1", "job_ü"):
+        for job_type, payload in (("update.check", {}), ("update.apply", {"expected_commit": SHA2})):
+            mgr, sent = _manager(home)
+            await _dispatch(mgr, job_type, payload, job_id=job_id)
+            f = _failed(sent)
+            assert f.code == "update_invalid_request" and f.job_id == job_id, (job_id, f)
+    assert fake.calls == []
+    mgr, sent = _manager(home)
+    await _dispatch(mgr, "update.apply", {"expected_commit": SHA2}, job_id="job_01jbz8k6d1f2g3h4j5k6m7n8p9")
+    assert isinstance(sent[-1], pm.JobCompleted)
+
+
 async def test_consent_is_read_live_for_every_job(home, fake, monkeypatch):
     _updatable(monkeypatch)
     mgr, sent = _manager(home)
