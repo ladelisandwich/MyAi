@@ -1408,8 +1408,9 @@ class _Run:
             raise self.fail("update_no_upstream", branch=branch)
         if not res.ok:
             raise self._git_failure(res)
-        if not is_ref_name(remote):
-            raise self.fail("update_bad_ref_name", name=clean_line(remote, NAME_MAX))
+        if not is_ref_name(remote):  # git also accepts a URL here (branch.<name>.remote): never report one
+            raise self.fail("update_bad_ref_name",
+                            name=clean_line(_REMOTE_ADDRESS.sub("<remote address>", remote), NAME_MAX))
         res = self.git("rev-parse", "--symbolic-full-name", "@{u}")
         if not res.ok:
             if "upstream" in res.err and not res.timed_out:

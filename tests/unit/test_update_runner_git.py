@@ -214,6 +214,13 @@ def test_remote_name_that_looks_like_an_option_is_refused(env, tmp_path):
     assert not marker.exists()
 
 
+def test_a_url_as_the_branch_remote_is_refused_without_reporting_it(env):
+    git("-C", str(env.repo.src), "config", "branch.main.remote", "https://example.invalid/team/private.git")
+    data, _ = _check(env)
+    assert data["error"]["code"] == "update_bad_ref_name" and "<remote address>" in data["error"]["message"]
+    assert "example.invalid" not in json.dumps(data) and "private.git" not in json.dumps(data)
+
+
 @pytest.mark.parametrize("name", ["a..b", "-x", "x.lock", "x/", ".x", "a//b", "a b"])
 def test_branch_names_git_would_misread_are_refused(name):
     assert runner.is_ref_name(name) is False
