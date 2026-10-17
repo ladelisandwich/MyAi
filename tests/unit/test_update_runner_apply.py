@@ -870,6 +870,61 @@ def test_log_and_run_files_hold_no_raw_tool_output_tokens(env):
         assert "ghp_SECRETtoken123" not in text and "user:" not in text
 
 
+KEEP_AWAKE_CHILD = r'''
+import os, sys, time
+from homemesh.update import runner
+fake, how, pidfile = sys.argv[1], sys.argv[2], sys.argv[3]
+real = runner.shutil.which
+runner.shutil.which = lambda name, *a, **kw: fake if name == "systemd-inhibit" else real(name, *a, **kw)
+
+
+class Run:
+    def tool_env(self):
+        return dict(os.environ)
+
+    def log(self, text):
+        print(text, flush=True)
+
+
+awake = runner._KeepAwake(Run())
+awake.start()
+deadline = time.monotonic() + 15
+while not os.path.exists(pidfile) and time.monotonic() < deadline:  # the inhibitor's command is running
+    time.sleep(0.05)
+time.sleep(0.2)
+if how == "stop":
+    awake.stop()
+os._exit(0)  # "kill": gone without stop() or any finally, like a SIGKILL
+'''
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="systemd-inhibit is Linux-only")
+@pytest.mark.parametrize("how", ["stop", "kill"])
+def test_the_sleep_inhibitor_ends_with_the_runner(tmp_path, how):
+    """9.3: the inhibitor must not outlive the runner, also when the runner is killed outright."""
+    pidfile = tmp_path / "inhibitor.pid"
+    fake = tmp_path / "systemd-inhibit"
+    fake.write_text(f'#!/bin/sh\necho $$ > {pidfile}\nwhile [ "${{1#--}}" != "$1" ]; do shift; done\nexec "$@"\n')
+    fake.chmod(0o755)
+    script = tmp_path / "child.py"
+    script.write_text(KEEP_AWAKE_CHILD)
+    env = {**os.environ, "PYTHONPATH": str(Path(runner.__file__).parents[2])}
+    proc = subprocess.run([sys.executable, str(script), str(fake), how, str(pidfile)], env=env, capture_output=True,
+                          timeout=60, check=False)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    deadline = time.monotonic() + 15
+    while not pidfile.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    pid = int(pidfile.read_text())
+    while runner.proc_start_time(pid) is not None and time.monotonic() < deadline:
+        time.sleep(0.05)
+    alive = runner.proc_start_time(pid) is not None
+    if alive:
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGKILL)
+    assert not alive, "the sleep inhibitor outlived the runner"
+
+
 # --------------------------------------------------------------------------- interruptions
 
 def _child(layout, b, phase, sig, tmp_path):

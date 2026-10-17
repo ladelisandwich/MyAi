@@ -385,7 +385,6 @@ TIMEOUTS: dict[str, float] = {
 }
 SLEEP_GAP_S = 10.0  # one poll step longer than this means the computer slept: not counted
 POLL_S = 1.0
-KEEP_AWAKE_S = 10800
 MIN_FREE_BYTES = 2 * 1024 ** 3
 LINGER_DIR = "/var/lib/systemd/linger"
 UNIT = "homemesh.service"
@@ -1747,6 +1746,7 @@ class _KeepAwake:
     def __init__(self, run: _Apply) -> None:
         self.r = run
         self.proc: subprocess.Popen[bytes] | None = None
+        self.lifeline: int | None = None  # write end of the pipe the inhibitor's `cat` reads
         self.win = False
 
     def start(self) -> None:
@@ -1756,12 +1756,21 @@ class _KeepAwake:
                 self.win = bool(_kernel32().SetThreadExecutionState(es_continuous | es_system_required))
             elif sys.platform.startswith("linux"):
                 exe = shutil.which("systemd-inhibit", path="/usr/bin:/bin:/usr/local/bin")
-                if exe:
-                    self.proc = subprocess.Popen(
-                        [exe, "--what=sleep:idle", "--who=HomeMesh", "--why=Updating HomeMesh", "--mode=block",
-                         "sleep", str(KEEP_AWAKE_S)],
-                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                        start_new_session=True, env=self.r.tool_env())
+                cat = shutil.which("cat", path="/usr/bin:/bin")
+                if exe and cat:
+                    # The inhibitor lives exactly as long as this runner: `cat` reads a pipe whose write end
+                    # only this process holds, and ends at EOF, i.e. when the runner exits in any way (a
+                    # SIGKILL or the OOM killer included). `sleep 10800` blocked sleep for up to three hours
+                    # after a runner that was killed outright (the POSIX launch is its own session, so nothing
+                    # else stops it).
+                    read_fd, self.lifeline = os.pipe()
+                    try:
+                        self.proc = subprocess.Popen(
+                            [exe, "--what=sleep:idle", "--who=HomeMesh", "--why=Updating HomeMesh", "--mode=block",
+                             cat], stdin=read_fd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            start_new_session=True, close_fds=True, env=self.r.tool_env())
+                    finally:
+                        os.close(read_fd)
         except Exception as exc:
             self.r.log(f"keep-awake not available: {exc}")
 
@@ -1770,6 +1779,13 @@ class _KeepAwake:
             if self.win:
                 _kernel32().SetThreadExecutionState(0x80000000)
                 self.win = False
+        if self.lifeline is not None:
+            with contextlib.suppress(OSError):
+                os.close(self.lifeline)  # EOF: cat and with it systemd-inhibit end by themselves
+            self.lifeline = None
+            if self.proc is not None:
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    self.proc.wait(timeout=3)
         if self.proc is not None:
             with contextlib.suppress(OSError):
                 if self.proc.poll() is None:
