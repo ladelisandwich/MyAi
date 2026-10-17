@@ -300,8 +300,6 @@ export function canCheck(n: NodeSummary, { checking = false } = {}): boolean {
 
 export const HUB_UPDATE_KEY = "homemesh.hubUpdate";
 const HUB_UPDATE_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
-/** How long help is kept for a request whose fate the hub may still learn (lost answer, launch timeout). */
-const HUB_UPDATE_GRACE_MS = 10 * 60 * 1000;
 
 /** What the page needs to help when the hub doesn't come back from its own update. Built from the hub's
  * `build` before the update is sent, so it is there even if the page is reloaded while the hub is down. */
@@ -374,23 +372,16 @@ export function reconcileHubUpdate(rec: HubUpdateRecord, nodes: NodeSummary[], n
   const hub = nodes.find((x) => x.id === rec.node_id);
   if (!hub) return { action: "clear", outcome: null };
   const upd = hub.update ?? null;
-  const saved = parseTime(rec.saved_at) ?? 0;
-  const young = now - saved <= HUB_UPDATE_GRACE_MS;
   if (rec.update_id === null) {
     // The apply request never answered: keep for a while in case it went through.
+    const saved = parseTime(rec.saved_at) ?? 0;
     if (upd && ACTIVE_ROW_STATES.has(upd.state) && upd.expected_commit === rec.expected_commit) {
       return { action: "update", record: { ...rec, update_id: upd.id, run_id: isRunId(upd.run_id) ? upd.run_id : null } };
     }
-    return young ? { action: "keep" } : { action: "clear", outcome: null };
+    return now - saved > 10 * 60 * 1000 ? { action: "clear", outcome: null } : { action: "keep" };
   }
   if (!upd || upd.id !== rec.update_id) return { action: "clear", outcome: null };
   // "abandoned" is the hub's guess and a late report can bring the update back: keep helping until then.
-  // So is "failed" with update_launch_failed: the computer's 15 s wait for the helper ran out, but a helper that
-  // was merely slow to start (a cold python.exe under Defender, a slow systemd-run) goes on, restarts the hub
-  // and its reports make the row active again within seconds. Keep helping for a while, as for a lost answer.
-  if (upd.state === "failed" && upd.error?.code === "update_launch_failed") {
-    return young ? { action: "keep" } : { action: "clear", outcome: upd.state };
-  }
   if (!ACTIVE_ROW_STATES.has(upd.state) && upd.state !== "abandoned") return { action: "clear", outcome: upd.state };
   if (!rec.run_id && isRunId(upd.run_id)) return { action: "update", record: { ...rec, run_id: upd.run_id } };
   return { action: "keep" };

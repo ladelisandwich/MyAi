@@ -132,17 +132,6 @@ describe("Computers page with updates", () => {
     expect(screen.queryByTestId("hub-update-notice")).toBeNull();
   });
 
-  it("keeps the help when the hub's helper only seemed not to start (accept timeout)", async () => {
-    writeHubUpdate({ ...hubUpdateRecord(hubNode(), hubNode().build as ReturnType<typeof build>, SHA_B), update_id: "job-apply-1" });
-    stubFetch({ "GET /api/v1/nodes": () => json(200, [hubNode({ update: row({ state: "failed", run_id: null, finished_at: iso(0),
-      error: { code: "update_launch_failed", message: "The update helper could not be started: no answer within 15 s.", hint: null } }) })]) });
-    render(<NodesPage />);
-    await within(await screen.findByTestId("update-panel-n-hub")).findByText(/Update failed/);
-    await act(async () => { await Promise.resolve(); });
-    expect(readHubUpdate()).toMatchObject({ update_id: "job-apply-1" });
-    expect(screen.getByTestId("hub-update-notice")).toBeInTheDocument();
-  });
-
   it("keeps the help and learns the run id while the hub update runs", async () => {
     writeHubUpdate({ ...hubUpdateRecord(hubNode(), hubNode().build as ReturnType<typeof build>, SHA_B), update_id: "job-apply-1" });
     stubFetch({ "GET /api/v1/nodes": () => json(200, [hubNode({ update: row({ phase: "building" }) })]) });
