@@ -297,6 +297,13 @@ describe("hub update record", () => {
     expect(reconcileHubUpdate(rec, [hubNode({ update: row({ state: "ok", finished_at: iso(0) }) })], NOW)).toEqual({ action: "clear", outcome: "ok" });
     expect(reconcileHubUpdate(rec, [hubNode({ update: row({ state: "abandoned", run_id: null }) })], NOW)).toEqual({ action: "keep" });
     expect(reconcileHubUpdate(rec, [hubNode({ update: row({ id: "other" }) })], NOW)).toMatchObject({ action: "clear" });
+    // The worker's accept wait ran out: the hub marks the row failed, but a slow helper may still restart the hub.
+    const launchTimeout = row({ state: "failed", run_id: null, finished_at: iso(0), error: { code: "update_launch_failed",
+      message: "The update helper could not be started: it did not answer within 15 seconds.", hint: null } });
+    expect(reconcileHubUpdate(rec, [hubNode({ update: launchTimeout })], NOW + 60_000)).toEqual({ action: "keep" });
+    expect(reconcileHubUpdate(rec, [hubNode({ update: launchTimeout })], NOW + 11 * MIN)).toEqual({ action: "clear", outcome: "failed" });
+    expect(reconcileHubUpdate(rec, [hubNode({ update: { ...launchTimeout, error: { code: "update_not_allowed", message: "m", hint: null } } })], NOW))
+      .toEqual({ action: "clear", outcome: "failed" });
     expect(reconcileHubUpdate(rec, [node()], NOW)).toMatchObject({ action: "clear" });
     // The apply request never answered: adopt a matching active row, or give up after 10 minutes.
     const unsent = { ...rec, update_id: null };
