@@ -5,6 +5,7 @@ import { ErrorAlert, Spinner, ToastProvider } from "./components/ui";
 import { StoredHubUpdateNotice } from "./components/UpdatePanel";
 import { EventsProvider, useEvents } from "./lib/events";
 import { navigate, useRoute } from "./lib/router";
+import { clearHubUpdate } from "./lib/update";
 import ChatPage from "./pages/Chat";
 import DashboardPage from "./pages/Dashboard";
 import JobsPage from "./pages/Jobs";
@@ -97,6 +98,9 @@ export default function App() {
 
   const logout = async () => {
     try { await api.post("/api/v1/auth/logout"); } catch { /* ignore */ }
+    // The saved hub-update help holds the hub's folders, which the API shows the owner only, and the
+    // can't-connect screen shows it without signing in: it leaves with the person who saved it.
+    clearHubUpdate();
     navigate("/chat");
     await refresh();
   };

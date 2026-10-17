@@ -204,6 +204,20 @@ describe("app start while the hub is down", () => {
     expect(screen.getByTestId("hub-update-notice").textContent).not.toContain("Updating");
   });
 
+  it("forgets the saved help (it holds owner-only folders) when the owner signs out", async () => {
+    writeHubUpdate({ ...hubUpdateRecord(hubNode(), hubNode().build as ReturnType<typeof build>, SHA_B), update_id: "job-apply-1" });
+    let signedIn = true;
+    const user = { id: "u1", username: "ann", display_name: "Ann", role: "owner" };
+    stubFetch({
+      "GET /api/v1/auth/status": () => json(200, { setup_required: false, authenticated: signedIn, user: signedIn ? user : null }),
+      "POST /api/v1/auth/logout": () => { signedIn = false; return json(200, { ok: true }); },
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Sign out" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull());
+    expect(window.localStorage.getItem(HUB_UPDATE_KEY)).toBeNull();
+  });
+
   it("shows only the usual error without a saved record", async () => {
     stubFetch({});
     render(<App />);
