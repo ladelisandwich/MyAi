@@ -3,6 +3,7 @@ HomeMesh process (``tests/fake_homemesh.py``) and an injected command table (ven
 stubbed): every phase, every failure path and the rollback, on Linux without systemd, pip or the network."""
 
 import contextlib
+import io
 import json
 import os
 import shutil
@@ -11,6 +12,7 @@ import sqlite3
 import stat
 import subprocess
 import sys
+import tarfile
 import time
 from pathlib import Path
 
@@ -224,6 +226,57 @@ def test_legacy_real_directory_needs_the_installer(env):
     _code, run, phases, _ = _apply(env, expected=b)
     assert run["error"]["code"] == "update_needs_installer" and "install.sh --upgrade" in run["error"]["hint"]
     assert "building" not in phases and env.running_pid() == pid and env.stable.is_dir()
+
+
+def _tar(path, members):
+    with tarfile.open(path, "w") as tf:
+        for name, kind, value in members:
+            info = tarfile.TarInfo(name)
+            if kind == "file":
+                info.size = len(value.encode())
+                tf.addfile(info, io.BytesIO(value.encode()))
+                continue
+            info.type = {"dir": tarfile.DIRTYPE, "sym": tarfile.SYMTYPE, "hard": tarfile.LNKTYPE}[kind]
+            info.linkname = value or ""
+            tf.addfile(info)
+    return str(path)
+
+
+@pytest.mark.parametrize("filtered", [True, False], ids=["data-filter", "no-data-filter"])
+@pytest.mark.parametrize("members", [
+    # a hard link's target is relative to the archive root, not to the member's folder
+    [("a/b/evil", "hard", "../victim"), ("a/b/evil", "file", "pwned")],
+    # each link looks inside on its own; together they lead out, and a file is written through them
+    [("s", "sym", "."), ("t", "sym", "s/s/../../outside"), ("t/pwned", "file", "pwned")],
+    [("abs", "sym", "/"), ("abs/pwned", "file", "pwned")],
+    [("a/../../pwned", "file", "pwned")],
+], ids=["hardlink", "symlink-chain", "absolute-link", "dotdot"])
+def test_unpacking_the_source_never_writes_outside_the_build(tmp_path, monkeypatch, filtered, members):
+    """B.3: what git archive writes is unpacked with tarfile's data filter, or (Python 3.11.0-3.11.3, which
+    lack it) with the runner's own checks. Neither lets an archive write outside the build folder."""
+    if not filtered:
+        monkeypatch.delattr(tarfile, "data_filter", raising=False)
+    victim = tmp_path / "victim"
+    victim.write_text("safe")
+    (tmp_path / "outside").mkdir()
+    build = tmp_path / "build"
+    build.mkdir()
+    with pytest.raises((ValueError, tarfile.TarError, OSError)):  # all three end as update_venv_failed
+        runner._extract(_tar(tmp_path / "x.tar", members), str(build / "src"))
+    assert victim.read_text() == "safe"
+    assert list((tmp_path / "outside").iterdir()) == [] and not (tmp_path / "pwned").exists()
+
+
+@pytest.mark.parametrize("filtered", [True, False], ids=["data-filter", "no-data-filter"])
+def test_unpacking_keeps_what_git_archive_writes(tmp_path, monkeypatch, filtered):
+    if not filtered:
+        monkeypatch.delattr(tarfile, "data_filter", raising=False)
+    tar = _tar(tmp_path / "x.tar", [("pyproject.toml", "file", "[project]\n"), ("docs/", "dir", None),
+                                    ("docs/a.md", "file", "a"), ("README.md", "sym", "docs/a.md"),
+                                    ("docs/up", "sym", "../pyproject.toml")])
+    runner._extract(tar, str(tmp_path / "src"))
+    assert (tmp_path / "src" / "README.md").read_text() == "a"
+    assert (tmp_path / "src" / "docs" / "up").read_text() == "[project]\n"
 
 
 def test_a_new_commit_pushed_after_the_prechecks_is_not_used(env):

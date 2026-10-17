@@ -2794,24 +2794,36 @@ def _spawn_detached(argv: list[str], *, env: dict[str, str], cwd: str) -> subpro
 
 
 def _extract(tar_path: str, dest: str) -> None:
-    """Unpack ``git archive`` output; refuses absolute names, ``..`` and links pointing outside."""
+    """Unpack ``git archive`` output; refuses absolute names, ``..``, links pointing outside and anything
+    that would be written through a link.
+
+    Without ``tarfile.data_filter`` (Python 3.11.0-3.11.3) the same rules are applied member by member, each
+    checked against what is already on disk (a symlink extracted earlier is resolved for real, as the data
+    filter does), and only the member types ``git archive`` writes are accepted: no hard links, devices or
+    FIFOs."""
     os.makedirs(dest)
     with tarfile.open(tar_path, "r:") as tf:
         if hasattr(tarfile, "data_filter"):
             tf.extractall(dest, filter="data")
             return
         root = os.path.realpath(dest)
+
+        def inside(path: str) -> bool:
+            real = os.path.realpath(path)
+            return real == root or real.startswith(root + os.sep)
+
+        trusted = {"filter": "fully_trusted"} if hasattr(tarfile, "fully_trusted_filter") else {}
         for m in tf.getmembers():
             name = m.name.replace("\\", "/")
             if name.startswith("/") or ".." in name.split("/") or re.match(r"[A-Za-z]:", name):
                 raise ValueError(f"unsafe path in archive: {m.name}")
-            if m.issym() or m.islnk():
-                target = os.path.realpath(os.path.join(dest, os.path.dirname(name), m.linkname))
-                if not (target == root or target.startswith(root + os.sep)):
-                    raise ValueError(f"link pointing outside the archive: {m.name}")
-            if m.isdev():
-                raise ValueError(f"device file in archive: {m.name}")
-        tf.extractall(dest)  # noqa: S202 - every member was checked above
+            if not (m.isreg() or m.isdir() or m.issym()):
+                raise ValueError(f"unexpected member type in archive: {m.name}")
+            if not inside(os.path.join(dest, name)):
+                raise ValueError(f"path through a link in archive: {m.name}")
+            if m.issym() and not inside(os.path.join(dest, os.path.dirname(name), m.linkname)):
+                raise ValueError(f"link pointing outside the archive: {m.name}")
+            tf.extract(m, dest, **trusted)  # checked above, against the disk as it is now
 
 
 # =========================================================================== args.json (design 8.1)
