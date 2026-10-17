@@ -2855,6 +2855,13 @@ def _extract(tar_path: str, dest: str) -> None:
                 raise ValueError(f"path through a link in archive: {m.name}")
             if m.issym() and not inside(os.path.join(dest, os.path.dirname(name), m.linkname)):
                 raise ValueError(f"link pointing outside the archive: {m.name}")
+            if m.isdir():
+                # extract() would apply the member's mode at once (extractall defers it), so a folder without
+                # owner write/search bits would refuse the files that follow; folders are made usable instead.
+                os.makedirs(os.path.join(dest, name), mode=0o755, exist_ok=True)
+                continue
+            if m.isreg():
+                m.mode = (m.mode & 0o755) | 0o600  # like the data filter: no setuid/sticky, no group/other write
             tf.extract(m, dest, **trusted)  # checked above, against the disk as it is now
 
 

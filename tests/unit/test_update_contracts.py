@@ -377,7 +377,7 @@ def test_timeout_kills_the_whole_process_group(env, tmp_path):
 def test_command_output_is_captured_without_pipes_and_decoded_leniently(env):
     run = runner._Check(env.args("check"), runner.Hooks())
     res = run.cmd("x", [sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'ok \\xff \\xc5\\x81\\n');"
-                                  "sys.stderr.write('warn\\n')"], timeout_s=30, env=dict(os.environ), capture=True)
+                                  "sys.stderr.buffer.write(b'warn\\n')"], timeout_s=30, env=dict(os.environ), capture=True)
     assert res.ok and res.out == "ok \ufffd Ł\n" and res.err == "warn\n"
     missing = run.cmd("x", [str(env.tmp / "does-not-exist")], timeout_s=5, env=dict(os.environ))
     assert missing.returncode == 127 and not missing.ok

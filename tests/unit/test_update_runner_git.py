@@ -175,8 +175,16 @@ def test_no_upstream(env):
 
 def test_not_a_checkout(env):
     import shutil
+    import stat
 
-    shutil.rmtree(env.repo.src / ".git")
+    def writable_then_retry(func, path, _exc):  # git writes its object files read-only; Windows won't delete those
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
+
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(env.repo.src / ".git", onexc=writable_then_retry)
+    else:
+        shutil.rmtree(env.repo.src / ".git", onerror=writable_then_retry)
     data, _ = _check(env)
     assert data["error"]["code"] == "update_not_git_checkout"
 
