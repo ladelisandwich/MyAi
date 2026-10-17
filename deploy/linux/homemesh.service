@@ -1,16 +1,21 @@
 # Reference systemd *user* unit. 'homemesh service install' writes an equivalent unit with the
 # correct interpreter path to ~/.config/systemd/user/homemesh.service - you normally do not
-# need to copy this file by hand.
+# need to copy this file by hand. ExecStart uses the stable path <prefix>/venv, a link to the
+# current version's venv (venvs/<id>), so it never changes when HomeMesh is updated.
 [Unit]
 Description=HomeMesh AI (personal AI platform)
 After=network-online.target
 Wants=network-online.target
+# A broken install (e.g. the system Python changed under the venv) must not restart every 5 s forever.
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
 ExecStart=%h/.local/share/homemesh/venv/bin/python -m homemesh run
 Restart=on-failure
 RestartSec=5
+RestartPreventExitStatus=2
 TimeoutStopSec=30
 NoNewPrivileges=yes
 PrivateTmp=yes

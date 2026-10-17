@@ -13,6 +13,12 @@ Connection loop:
 
 Fatal conditions (credentials revoked/invalid, incompatible protocol) stop the loop with a
 clear message instead of retrying forever.
+
+Remote updates (``worker/updates.py``): ``update.*`` jobs are handled by :class:`UpdateManager` before the
+local policy (they run even when paused or at capacity); while an update drains or restarts this computer,
+new jobs are rejected with ``updating``. The hello carries what this process runs (``build``) and the
+latest update run (``update``, also in every heartbeat), and every connection state change is written to
+``<data>/update/agent.json``, the update runner's proof that a new version works.
 """
 
 from __future__ import annotations
@@ -27,7 +33,7 @@ from typing import Any
 
 from pydantic import ValidationError
 from websockets.asyncio.client import ClientConnection, connect
-from websockets.exceptions import ConnectionClosed, InvalidStatus, InvalidURI
+from websockets.exceptions import ConnectionClosed, InvalidMessage, InvalidStatus, InvalidURI
 
 from homemesh.common.config import HomeMeshConfig
 from homemesh.common.logging import get_logger
@@ -45,10 +51,13 @@ from homemesh.protocol.jobs import (
     ToolExecPayload,
 )
 from homemesh.protocol.models import BackendStatus, ModelInfo
+from homemesh.protocol.update import UPDATE_JOB_TYPES
+from homemesh.update.files import AgentState
 from homemesh.version import SUPPORTED_PROTOCOL_VERSIONS, __version__
 from homemesh.worker.credentials import WorkerCredentials
 from homemesh.worker.executor import Executor, JobFailure, failure_from_exception
 from homemesh.worker.policy import LocalPolicy
+from homemesh.worker.updates import UPDATING_REASON, UpdateManager
 
 log = get_logger(__name__)
 
@@ -56,6 +65,7 @@ MODEL_REFRESH_INTERVAL_S = 60.0
 FATAL_CLOSE_CODES = {pm.CLOSE_UNAUTHORIZED: "credentials rejected", pm.CLOSE_REVOKED: "node revoked",
                      pm.CLOSE_PROTOCOL_INCOMPATIBLE: "protocol incompatible",
                      pm.CLOSE_SUPERSEDED: "another process connected with the same node identity"}
+CLOSE_EXPECTED_HELLO = 1002  # the coordinator could not read our hello: this version can't talk to it
 
 
 class FatalWorkerError(Exception):
@@ -96,6 +106,7 @@ class WorkerAgent:
         self.models: list[ModelInfo] = []
         self.backend_status: list[BackendStatus] = []
         self.jobs: dict[str, asyncio.Task[None]] = {}
+        self.job_types: dict[str, str] = {}  # job id -> job type (drain.json lists what still runs)
         self._ws: ClientConnection | None = None
         self._send_lock = asyncio.Lock()
         self._stop = asyncio.Event()
@@ -105,6 +116,7 @@ class WorkerAgent:
         self.node_id: str | None = None
         self.state = "starting"
         self.last_error: str | None = None
+        self.updates = UpdateManager(cfg, paths, send=self.send, jobs=self.jobs, job_types=self.job_types)
         from homemesh.tools.runtime import make_worker_tool_runner
 
         self.executor = Executor(
@@ -165,6 +177,17 @@ class WorkerAgent:
 
     # ------------------------------------------------------------------ main loop
     async def run(self) -> None:
+        # The update watch runs for the agent's whole life, connected or not: it finalizes a dead update
+        # run and keeps the report that the next hello carries.
+        watcher = asyncio.create_task(self.updates.watch_loop(), name="worker-update-watch")
+        try:
+            await self._run()
+        finally:
+            watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await watcher
+
+    async def _run(self) -> None:
         attempt = 0
         delay = 1.0
         while not self._stop.is_set():
@@ -172,19 +195,25 @@ class WorkerAgent:
                 await self._session()
                 delay = 1.0
                 attempt = 0
+                if not self._stop.is_set():
+                    await self.updates.set_agent_state("unreachable", "the coordinator closed the connection")
             except FatalWorkerError as exc:
                 self.state = "stopped"
                 self.last_error = str(exc)
                 log.error("Worker stopped: %s", exc)
+                await self.updates.set_agent_state("rejected", str(exc))
                 return
-            except (OSError, ConnectionClosed, InvalidStatus, TimeoutError, ssl.SSLError) as exc:
+            except (OSError, ConnectionClosed, InvalidStatus, InvalidMessage, TimeoutError, ssl.SSLError) as exc:
                 self.last_error = self._describe(exc)
                 log.warning("Coordinator connection problem: %s", self.last_error)
+                await self.updates.set_agent_state(self.agent_state_for(exc), self.last_error)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 self.last_error = f"{type(exc).__name__}: {exc}"
                 log.exception("Unexpected worker error")
+                await self.updates.set_agent_state(self.agent_state_for(exc),
+                                                   f"unexpected worker error: {self.last_error}")
             finally:
                 self._connected.clear()
                 self._ws = None
@@ -203,6 +232,28 @@ class WorkerAgent:
                 await asyncio.wait_for(self._stop.wait(), timeout=sleep_for)
             delay = min(delay * 2, self.cfg.worker.reconnect_max_delay_s)
         self.state = "stopped"
+
+    @staticmethod
+    def agent_state_for(exc: BaseException) -> AgentState:
+        """How a failed connection reads in ``agent.json`` (design 7.5). ``rejected``: this code or its
+        identity can't work with the hub (an update to it is rolled back). ``unreachable``: the hub could not
+        be reached, which proves nothing either way."""
+        if isinstance(exc, FatalWorkerError):
+            return "rejected"
+        if isinstance(exc, ConnectionClosed):
+            code = exc.rcvd.code if exc.rcvd else None
+            return "rejected" if code == CLOSE_EXPECTED_HELLO or code in FATAL_CLOSE_CODES else "unreachable"
+        if isinstance(exc, InvalidStatus):
+            return "rejected" if 400 <= exc.response.status_code < 500 else "unreachable"
+        if isinstance(exc, InvalidMessage):
+            # No valid HTTP response to the upgrade request: the hub closed the connection during the handshake
+            # (restarting, overloaded, network) or something else answers there. Nothing about this code.
+            return "unreachable"
+        if isinstance(exc, ssl.SSLCertVerificationError):
+            return "rejected"
+        if isinstance(exc, (OSError, TimeoutError, ssl.SSLError)):
+            return "unreachable"
+        return "rejected"
 
     @staticmethod
     def _describe(exc: BaseException) -> str:
@@ -235,6 +286,16 @@ class WorkerAgent:
         if self.embedded and creds.coordinator_url.startswith("https://"):
             ca_file = str(self.paths.tls_dir / "ca.pem")
         self.state = "connecting"
+        build = await self.updates.build_info()
+        if self.updates.agent_state is None:  # once per process; a retry keeps the last outcome readable
+            await self.updates.set_agent_state("connecting", creds.coordinator_url)
+        # Everything the hello carries is gathered BEFORE connecting. The coordinator closes a connection whose
+        # hello doesn't arrive within 15 s with 1002 "expected hello", which agent.json records as "rejected"
+        # (an update to this version is then rolled back); listing models (up to 30 s per backend) and hardware
+        # detection can be that slow right after a restart.
+        await self.refresh_models()
+        hw = await self.hardware()
+        await self.updates.refresh()  # the hello reports the latest update run, finalized if it died
         try:
             ws_cm = connect(
                 url, additional_headers={"Authorization": f"{pm.AUTH_SCHEME} {creds.node_id}:{creds.node_secret}",
@@ -247,8 +308,6 @@ class WorkerAgent:
             raise FatalWorkerError(f"Invalid coordinator URL {creds.coordinator_url!r}: {exc}") from exc
         async with ws_cm as ws:
             self._ws = ws
-            await self.refresh_models()
-            hw = await self.hardware()
             limits = pm.NodeLimits(
                 max_concurrent_jobs=self.cfg.worker.max_concurrent_jobs,
                 allow_cpu_inference=self.cfg.worker.allow_cpu_inference,
@@ -261,7 +320,8 @@ class WorkerAgent:
                 models=self.models, task_types=self.cfg.worker.task_types, mode=self.policy.mode, limits=limits,
                 allowed_roots=self.cfg.worker.allowed_roots, allowed_tools=self.cfg.worker.allowed_tools,
                 allow_remote_mode_change=self.cfg.worker.allow_remote_mode_change,
-                running_jobs=list(self.jobs), embedded=self.embedded))
+                running_jobs=list(self.jobs), embedded=self.embedded, build=build.to_wire(),
+                update=self.updates.report))
             welcome = await self._expect_welcome(ws)
             self.node_id = welcome.node_id
             if self.cfg.worker.allow_remote_mode_change:
@@ -271,6 +331,7 @@ class WorkerAgent:
             self.state = "connected"
             self.last_error = None
             self._connected.set()
+            await self.updates.set_agent_state("connected", creds.coordinator_url)
             log.info("Connected to coordinator %s as %s (protocol v%d, mode %s)", creds.coordinator_url,
                      welcome.node_name, welcome.protocol_version, self.policy.mode)
             hb = asyncio.create_task(self._heartbeat_loop(welcome.heartbeat_interval_s), name="worker-heartbeat")
@@ -314,11 +375,11 @@ class WorkerAgent:
         seq = 0
         while True:
             try:
-                tel = await asyncio.to_thread(self.sampler.sample, len(self.jobs))
+                tel = await asyncio.to_thread(self.sampler.sample, self.updates.running_count())
                 self._last_telemetry = tel
                 seq += 1
                 await self.send(pm.Heartbeat(seq=seq, telemetry=tel, running_jobs=list(self.jobs),
-                                             mode=self.policy.mode))
+                                             mode=self.policy.mode, update=self.updates.report))
             except (ConnectionError, ConnectionClosed):
                 return
             except Exception:
@@ -354,7 +415,10 @@ class WorkerAgent:
             await self._on_dispatch(msg)
         elif isinstance(msg, pm.JobCancel):
             task = self.jobs.get(msg.job_id)
-            if task:
+            if task and self.job_types.get(msg.job_id) == "update.apply":
+                # The update helper runs detached and can't be cancelled; its outcome arrives in the reports.
+                log.info("Ignoring cancel of update job %s: an update can't be cancelled", msg.job_id)
+            elif task:
                 log.info("Cancelling job %s: %s", msg.job_id, msg.reason)
                 task.cancel()
         elif isinstance(msg, pm.NodeConfig):
@@ -381,15 +445,29 @@ class WorkerAgent:
                 raise FatalWorkerError(f"{msg.message} [{msg.code}]")
 
     async def _on_dispatch(self, msg: pm.JobDispatch) -> None:
+        if msg.job_type in UPDATE_JOB_TYPES:
+            await self.updates.on_dispatch(msg)  # accepted even when paused or at capacity
+            return
+        if self.updates.draining:
+            log.info("Rejecting job %s (%s): %s", msg.job_id, msg.job_type, UPDATING_REASON)
+            await self.send(pm.JobRejected(job_id=msg.job_id, code="updating", reason=UPDATING_REASON))
+            return
         busy = bool(self._last_telemetry and self._last_telemetry.external_gpu_busy)
-        verdict = self.policy.check(msg.job_type, msg.priority, msg.payload, len(self.jobs), busy)
+        verdict = self.policy.check(msg.job_type, msg.priority, msg.payload, self.updates.running_count(), busy)
         if not verdict.ok:
             log.info("Rejecting job %s (%s): %s", msg.job_id, msg.job_type, verdict.reason)
             await self.send(pm.JobRejected(job_id=msg.job_id, code=verdict.code, reason=verdict.reason))
             return
-        if msg.job_id in self.jobs:
+        if msg.job_id in self.jobs or msg.job_id in self.job_types:
             return  # duplicate dispatch; already running
-        await self.send(pm.JobAccepted(job_id=msg.job_id))
+        # Registered before the first await: if an update starts draining while JobAccepted is on the wire,
+        # the watch loop must already list this job in drain.json, or the update would stop HomeMesh under it.
+        self.job_types[msg.job_id] = msg.job_type
+        try:
+            await self.send(pm.JobAccepted(job_id=msg.job_id))
+        except BaseException:
+            self.job_types.pop(msg.job_id, None)
+            raise
         self.jobs[msg.job_id] = asyncio.create_task(self._run_job(msg), name=f"job-{msg.job_id}")
 
     async def _run_job(self, msg: pm.JobDispatch) -> None:
@@ -416,6 +494,7 @@ class WorkerAgent:
                                              partial=partial or None))
         finally:
             self.jobs.pop(job_id, None)
+            self.job_types.pop(job_id, None)
             model = msg.payload.get("model")
             if msg.job_type in ("chat", "embed", "model.manage") and (model not in loaded_before
                                                                       or msg.job_type == "model.manage"):
@@ -447,6 +526,8 @@ class WorkerAgent:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await t
         self.jobs.clear()
+        self.job_types.clear()
+        self.updates.job_ids.clear()
 
     def status(self) -> dict[str, Any]:
         return {"state": self.state, "node_id": self.node_id, "mode": self.policy.mode, "running_jobs": list(self.jobs),

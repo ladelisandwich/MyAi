@@ -83,7 +83,13 @@ def _resolve_node(client: Any, ref: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------- commands
 
 def cmd_version(ctx: Ctx) -> int:
-    print(f"HomeMesh AI {__version__} (protocol v{PROTOCOL_VERSION}, Python {sys.version.split()[0]})")
+    from homemesh.update.record import build_info, format_version_line
+
+    info = build_info(ctx.paths)  # from the install record; never runs git, never guesses a commit
+    if ctx.args.json:
+        _out({**info.model_dump(mode="json"), "protocol": PROTOCOL_VERSION, "python": sys.version.split()[0]}, True)
+        return EXIT_OK
+    print(format_version_line(info))  # one line: installers and scripts embed it
     return EXIT_OK
 
 
@@ -94,8 +100,14 @@ def cmd_setup(ctx: Ctx) -> int:
 
 
 def cmd_run(ctx: Ctx) -> int:
+    from homemesh.common.instance import lock_is_held
     from homemesh.runtime import run_foreground
 
+    # Between stopping the old version and starting the new one the update helper holds the instance lock;
+    # say why instead of "already running". (When the helper starts the new version, the lock is free.)
+    if lock_is_held(ctx.paths.lock_file) and (line := _update_line(ctx)):
+        print(f"{line}. It starts HomeMesh itself when it is done; follow it with 'homemesh update status'.")
+        return EXIT_USAGE
     roles = ctx.args.roles.split(",") if ctx.args.roles else None
     return run_foreground(ctx.cfg, ctx.paths, roles)
 
@@ -116,9 +128,20 @@ def cmd_start(ctx: Ctx) -> int:
 
     if (code := _not_set_up(ctx, "start")) is not None:
         return code
+    if line := _update_line(ctx):
+        # Starting now would race the helper, which stops, switches and restarts HomeMesh itself.
+        print(f"{line}. It starts HomeMesh itself when it is done; follow it with 'homemesh update status'.")
+        return EXIT_OK if service.read_pid(ctx.paths) else EXIT_ERROR
     ok, message = service.start(ctx.paths)
     print(message)
     return EXIT_OK if ok else EXIT_ERROR
+
+
+def _update_line(ctx: Ctx) -> str | None:
+    """"An update is in progress (run …, <phase>; log …)" while an update helper runs, else None."""
+    from homemesh.cli.update import in_progress_line
+
+    return in_progress_line(ctx.paths)
 
 
 def cmd_stop(ctx: Ctx) -> int:
@@ -133,6 +156,9 @@ def cmd_restart(ctx: Ctx) -> int:
 
     if (code := _not_set_up(ctx, "restart")) is not None:
         return code
+    if line := _update_line(ctx):
+        print(f"{line}. It restarts HomeMesh itself; follow it with 'homemesh update status'.")
+        return EXIT_ERROR
     print(service.stop(ctx.paths, force=ctx.args.force))
     if service.read_pid(ctx.paths):
         return EXIT_ERROR
@@ -147,15 +173,18 @@ def cmd_status(ctx: Ctx) -> int:
 
     cfg = ctx.cfg
     pid = service.read_pid(ctx.paths)
+    update_line = None if ctx.args.url else _update_line(ctx)  # this computer's update, not --url's
     info: dict[str, Any] = {"roles": cfg.node.roles, "process": pid, "config": str(ctx.paths.config_file)}
     if not cfg.has_role("coordinator") and not ctx.args.url:
         info["mode"] = "worker" if cfg.has_role("worker") else "client"
         if cfg.has_role("worker"):
-            info["worker_process"] = "running" if pid else "not running"
+            info["worker_process"] = "running" if pid else (update_line or "not running")
             from homemesh.cli.doctor import _worker_link
 
             c = _worker_link(cfg, ctx.paths)
             info["coordinator_link"] = f"{SYMBOL[c.status]} {c.detail}"
+        if update_line and (pid or not cfg.has_role("worker")):
+            info["update"] = update_line
         _out(info, True) if ctx.args.json else print("\n".join(f"{k}: {v}" for k, v in info.items()))
         return EXIT_OK if pid or not cfg.has_role("worker") else EXIT_NOT_RUNNING
     client = ctx.client()
@@ -163,14 +192,19 @@ def cmd_status(ctx: Ctx) -> int:
         health = client.get("/api/v1/system/health")
         st = client.get("/api/v1/system/status") if client._client.headers.get("Authorization") else None
     except HomeMeshError as exc:
-        print(f"✗ {exc.message}" + (f"\n  {exc.hint}" if exc.hint else ""))
+        if exc.code == "not_running" and update_line:
+            print(update_line)  # stopped by the update helper, which starts it again
+        else:
+            print(f"✗ {exc.message}" + (f"\n  {exc.hint}" if exc.hint else ""))
         return EXIT_NOT_RUNNING if exc.code == "not_running" else EXIT_ERROR
     finally:
         client.close()
     if ctx.args.json:
-        _out({"health": health, "status": st}, True)
+        _out({"health": health, "status": st, "update": update_line}, True)
     else:
         print(f"HomeMesh {health['version']} at {client.base_url}: {health['status']}")
+        if update_line:
+            print(f"  {update_line}")
         if health.get("setup_required"):
             print("  Owner account not created yet: run 'homemesh setup' or open the web UI.")
         if st:
@@ -232,6 +266,17 @@ def cmd_logs(ctx: Ctx) -> int:
         except KeyboardInterrupt:
             pass
     return EXIT_OK
+
+
+def cmd_update(ctx: Ctx) -> int:
+    from homemesh.cli import update
+
+    action = ctx.args.update_action
+    guarded = {None: "update", "check": "check for updates", "allow": "allow updates for",
+               "disallow": "turn updates off for"}
+    if action in guarded and (code := _not_set_up(ctx, guarded[action])) is not None:
+        return code
+    return update.run(ctx)
 
 
 def cmd_service(ctx: Ctx) -> int:
@@ -755,6 +800,24 @@ def build_parser() -> argparse.ArgumentParser:
     lg.add_argument("-n", "--lines", type=int, default=100)
     lg.set_defaults(func=cmd_logs)
     sub.add_parser("version", help="print version information").set_defaults(func=cmd_version)
+
+    up = sub.add_parser("update", help="update HomeMesh on this computer from its git checkout (docs/UPDATING.md)",
+                        description="Without an action: check the branch this computer's checkout tracks for newer "
+                                    "commits, show them, and after asking install them in the background.")
+    up.add_argument("--yes", action="store_true", help="install without asking")
+    usub = up.add_subparsers(dest="update_action", metavar="<action>")
+    usub.add_parser("check", help="show what an update would install, without installing anything")
+    usub.add_parser("allow", help="let the hub's web app update this computer (takes effect immediately)")
+    usub.add_parser("disallow", help="turn updates from the hub off again (takes effect immediately)")
+    ust = usub.add_parser("status", help="show the latest update of this computer (works while HomeMesh is stopped)")
+    ust.add_argument("--json", dest="status_json", action="store_true", help="machine-readable output")
+    uri = usub.add_parser("record-install")  # no help= on purpose: not listed (run by the installers)
+    uri.add_argument("--source", required=True, help="the source folder (git checkout) that was installed")
+    uri.add_argument("--stable-venv", required=True, help="the stable venv path launchers use (<prefix>/venv)")
+    uri.add_argument("--git", help="absolute path of git, as found in the installer's terminal")
+    uri.add_argument("--node-dir", help="folder holding node / node.exe, if Node.js was found")
+    uri.add_argument("--built-by", default="installer", choices=["installer"])
+    up.set_defaults(func=cmd_update)
 
     sv = sub.add_parser("service", help="install/uninstall autostart (systemd user unit / Windows per-user autostart entry)")
     sv.add_argument("action", choices=["install", "uninstall", "status"])

@@ -76,6 +76,10 @@ jobs:
           $want = (Select-String -Path src\homemesh\version.py -Pattern '__version__ = "(.*)"').Matches[0].Groups[1].Value
           $ver = & $hm version
           if ($ver -notlike "*$want*") { throw "expected version $want, got: $ver" }
+          # Since 0.3.0 venv is a junction to venvs\<id>; the old real folder is kept as venvs\legacy-<time>.
+          if (-not ((Get-Item $venv -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "venv was not converted to a junction" }
+          if (-not (Get-ChildItem "$env:LOCALAPPDATA\Programs\HomeMesh\venvs" -Directory | Where-Object { $_.Name -cmatch '^legacy-[0-9]{14}$' })) { throw "the old program folder was not kept" }
+          if (-not (Test-Path "$venv\homemesh-install.json")) { throw "no install record in the new venv" }
           $rec = Get-Content "$env:HOMEMESH_HOME\data\homemesh.pid" -Raw | ConvertFrom-Json
           if (-not $rec.ready) { throw "no new PID record" }
           if (-not (Get-ChildItem "$env:HOMEMESH_HOME\data\backups\pre-migration-*")) { throw "no pre-migration backup" }
