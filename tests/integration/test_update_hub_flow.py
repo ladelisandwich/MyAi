@@ -1,6 +1,7 @@
-"""Remote updates end to end on the hub side: a real coordinator and simulated computers over real sockets
-(build info in the hello, update jobs, run reports in heartbeats and hellos). The worker's own update code is
-not involved: the simulated computer says exactly what a worker would."""
+"""Remote updates on the hub side: a real coordinator and simulated computers over real sockets (build info
+in the hello, update jobs, run reports in heartbeats and hellos). The worker's own update code is not
+involved: the simulated computer says exactly what a worker would, including cases a real worker reaches only
+rarely. ``test_update_flow.py`` runs the same flow with real worker agents and the real launcher."""
 
 from __future__ import annotations
 

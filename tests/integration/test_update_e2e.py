@@ -9,8 +9,9 @@
 * ``test_real_homemesh_*`` (opt-in: ``HOMEMESH_UPDATE_E2E=1``): the same with **this** HomeMesh (the working
   tree, committed into a temporary repository), installed from PyPI (hatchling, FastAPI, …) and, on the hub,
   with the web app built by npm: it needs network access and takes a few minutes. It runs a coordinator-only
-  node, because the worker agent's ``agent.json`` (the runner's proof that a worker connected) is written by
-  the worker part of the updater.
+  node (written before the worker part existed), so success there means "ready and stable"; the worker's
+  ``agent.json`` path (the runner's proof that a worker connected) is covered with real agents by
+  ``test_update_flow.py`` and against the real runner code by ``tests/unit/test_update_worker_contracts.py``.
 """
 
 from __future__ import annotations

@@ -277,11 +277,12 @@ class Harness:
         return r.json()["code"]
 
     async def add_worker(self, name: str, *, models: dict[str, list[str]] | None = None, token_delay: float = 0.005,
-                         wait_online: bool = True, web: dict[str, Any] | None = None,
+                         wait_online: bool = True, web: dict[str, Any] | None = None, paths: AppPaths | None = None,
                          **worker_overrides: Any) -> WorkerHandle:
+        """Enroll a real :class:`WorkerAgent` with a pairing code and run it (``paths``: its own data folders,
+        default ``<root>/worker-<name>``)."""
         code = await self.pairing_code()
-        wroot = self.root / f"worker-{name}"
-        wpaths = paths_for(wroot)
+        wpaths = paths or paths_for(self.root / f"worker-{name}")
         wpaths.ensure()
         creds = await asyncio.to_thread(join, self.base_url, code, wpaths, node_name=name)
         cfg = self.make_config(["worker"], name=name)
@@ -298,6 +299,20 @@ class Harness:
         if wait_online:
             await self.wait_node_online(creds.node_id)
         return handle
+
+    async def restart_worker(self, handle: WorkerHandle, *, stop: bool = True,
+                             wait_online: bool = True) -> WorkerHandle:
+        """Stop a worker (unless already stopped) and start a new agent on the same data
+        folders, credentials, config and mock backend: what a restart of HomeMesh on that computer does."""
+        if stop:
+            await handle.stop()
+        agent = WorkerAgent(handle.agent.cfg, handle.paths, backends={"mock": handle.backend})
+        task = asyncio.create_task(agent.run(), name=f"worker-{handle.name}")
+        new = WorkerHandle(handle.name, agent, task, handle.paths, handle.backend, handle.node_id)
+        self.workers.append(new)
+        if wait_online:
+            await agent.wait_connected(15)
+        return new
 
     async def add_simulated_worker(self, name: str, *, build: dict[str, Any] | None = None,
                                    update: dict[str, Any] | None = None, models: list[ModelInfo] | None = None,
