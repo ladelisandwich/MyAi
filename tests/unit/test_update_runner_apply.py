@@ -620,6 +620,34 @@ def test_systemd_restart_count_change_is_a_crash(env):
     assert b
 
 
+def test_polling_the_unit_logs_changes_only_and_keeps_no_capture_files(env, tmp_path, monkeypatch):
+    """verify() asks systemd for the unit's state every second, for up to half an hour of migrations: the log
+    gets one line per change, not the command and its output each time, and the run folder no files."""
+    states = tmp_path / "states.txt"
+    states.write_text("active 4242\nactive 4242\nactive 4242\nactivating 0\nactivating 0\n")
+    fake = tmp_path / "systemctl"
+    fake.write_text(f"#!{sys.executable}\nimport pathlib\np = pathlib.Path({str(states)!r})\n"
+                    "lines = p.read_text().splitlines()\nstate, pid = lines[0].split()\n"
+                    "p.write_text('\\n'.join(lines[1:] or lines) + '\\n')\n"
+                    "print(f'MainPID={pid}\\nActiveState={state}\\nSubState=running\\nNRestarts=0\\n"
+                    "ExecMainStatus=0\\nExecMainCode=0')\n")
+    fake.chmod(0o755)
+    real_which = shutil.which
+    monkeypatch.setattr(runner.shutil, "which",
+                        lambda name, *a, **kw: str(fake) if name == "systemctl" else real_which(name, *a, **kw))
+    args = env.args("apply", expected="a" * 40, service="systemd")
+    run = runner._Apply(args, runner.Hooks())
+    shown = [run.unit_show() for _ in range(5)]
+    assert [s["ActiveState"] for s in shown] == ["active"] * 3 + ["activating"] * 2 and shown[0]["MainPID"] == "4242"
+    log = env.log_text(args)
+    assert log.count("homemesh.service: ActiveState=") == 2 and "ActiveState=activating SubState=running" in log
+    assert " show -p " not in log
+    assert sorted(p.name for p in files.run_dir(env.paths, args["run_id"]).iterdir()) == ["args.json"]
+    run.systemctl("reset-failed", "homemesh.service")  # anything else is still logged and kept
+    assert "reset-failed homemesh.service" in env.log_text(args)
+    assert any(p.name.startswith("cmd-") for p in files.run_dir(env.paths, args["run_id"]).iterdir())
+
+
 def test_rollback_failed_when_the_old_version_does_not_start_either(env):
     env.start_homemesh()
     b = _commit(env, {"exit_at_start": 3})

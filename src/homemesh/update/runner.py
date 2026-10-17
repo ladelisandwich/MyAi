@@ -1252,28 +1252,32 @@ class _Run:
             time.sleep(0.05)
 
     def cmd(self, key: str, argv: list[str], *, timeout_s: float, env: dict[str, str], cwd: str | None = None,
-            capture: bool = False, quiet: bool = False) -> CmdResult:
+            capture: bool = False, quiet: bool = False, trace: bool = True) -> CmdResult:
         """Run one external command (no shell, no pipes, absolute executable) on an awake-time deadline;
-        every timeout kills the command's whole tree. ``quiet`` keeps its stdout out of the log."""
+        every timeout kills the command's whole tree. ``quiet`` keeps its stdout out of the log. ``trace=False``
+        is for status polls: neither the command nor its output is logged (only a failure is) and its
+        capture files are deleted; the caller logs what changed."""
         argv = [os.fspath(a) for a in argv]
-        self.log("$ " + _display(argv))
+        if trace:
+            self.log("$ " + _display(argv))
         fake = self.h.commands.get(key)
         if fake is not None:
             res = fake(list(argv), cwd=cwd, env=dict(env), timeout_s=timeout_s)
             for text in ((res.out if not quiet else ""), res.err):
-                if text.strip():
+                if text.strip() and trace:
                     self._log_output(text[-4000:])
         else:
             res = self._exec(argv, timeout_s=timeout_s, cwd=cwd or self.update_dir, env=env, capture=capture,
-                             quiet=quiet)
+                             quiet=quiet, trace=trace)
+        what = "" if trace else f"$ {_display(argv)}"
         if res.timed_out:
-            self.log(f"  -> timed out after {timeout_s:.0f} s; stopped it and everything it started")
+            self.log(f"{what}  -> timed out after {timeout_s:.0f} s; stopped it and everything it started")
         elif res.returncode != 0:
-            self.log(f"  -> exit code {res.returncode}")
+            self.log(f"{what}  -> exit code {res.returncode}")
         return res
 
     def _exec(self, argv: list[str], *, timeout_s: float, cwd: str, env: dict[str, str], capture: bool,
-              quiet: bool) -> CmdResult:
+              quiet: bool, trace: bool = True) -> CmdResult:
         out_path = self._capture_path()
         err_path = self._capture_path() if capture else None
         out_fd = create_private(out_path)
@@ -1303,7 +1307,7 @@ class _Run:
                 job = _WinJob(int(popen._handle))  # type: ignore[attr-defined]
             except Exception as exc:  # a grandchild may then escape a timeout kill; accepted (9.2)
                 self.log(f"  (no Job object: {exc})")
-        pump = _Pump(err_path or out_path, self._log_output)
+        pump = _Pump(err_path or out_path, self._log_output if trace else (lambda _text: None))
         deadline = AwakeDeadline(timeout_s, self.h.monotonic)
         step, timed_out = 0.01, False
         try:
@@ -1332,13 +1336,15 @@ class _Run:
         if capture:
             out = _read_text(out_path)
             err = _read_text(err_path) if err_path else ""
-            if out.strip() and not quiet:
+            if out.strip() and not quiet and trace:
                 self._log_output(out[:4000])
         else:
             out, err = _read_text(out_path, tail=65536), ""
-        self._done_with_capture(out_path, out)
+        # A status poll's captures are deleted (the check runner's way), never kept in the run folder.
+        done = self._done_with_capture if trace else (lambda path, text: _Run._done_with_capture(self, path, text))
+        done(out_path, out)
         if err_path:
-            self._done_with_capture(err_path, err)
+            done(err_path, err)
         rc = popen.returncode if popen.returncode is not None else -9
         return CmdResult(rc, out=out, err=err, timed_out=timed_out)
 
@@ -1797,6 +1803,7 @@ class _Apply(_Run):
         self.last_started: _Started | None = None  # the HomeMesh this runner started last (F.1)
         self._armed = False
         self._interrupted = False
+        self._unit_logged: tuple[str, ...] | None = None  # the last homemesh.service state written to the log
 
     # ----------------------------------------------------------------- capture files live in the run dir
     def _capture_path(self) -> str:
@@ -1978,19 +1985,27 @@ class _Apply(_Run):
             return False
         return p.started is None or abs(actual - p.started) < 1.0
 
-    def systemctl(self, *args: str, timeout: str = "systemctl") -> CmdResult:
+    def systemctl(self, *args: str, timeout: str = "systemctl", trace: bool = True) -> CmdResult:
         exe = shutil.which("systemctl", path="/usr/bin:/bin:/usr/local/bin") or "/usr/bin/systemctl"
         return self.cmd("systemctl", [exe, "--user", *args], timeout_s=self.t(timeout), env=self.tool_env(),
-                        capture=True)
+                        capture=True, trace=trace)
+
+    _UNIT_KEYS = ("ActiveState", "SubState", "MainPID", "NRestarts", "ExecMainStatus")
 
     def unit_show(self) -> dict[str, str]:
+        """``systemctl --user show homemesh.service``. Polled every second while verifying (up to 30 minutes
+        of migrations), so only a change of state reaches the log, and no capture file is kept."""
         res = self.systemctl("show", "-p", "MainPID,ActiveState,SubState,NRestarts,ExecMainStatus,ExecMainCode",
-                             UNIT)
+                             UNIT, trace=False)
         out: dict[str, str] = {}
         for line in res.out.splitlines():
             if "=" in line:
                 k, v = line.split("=", 1)
                 out[k.strip()] = v.strip()
+        state = tuple(out.get(k, "") for k in self._UNIT_KEYS)
+        if res.ok and state != self._unit_logged:
+            self._unit_logged = state
+            self.log(f"{UNIT}: " + " ".join(f"{k}={v or '-'}" for k, v in zip(self._UNIT_KEYS, state, strict=True)))
         return out
 
     def _request_stop(self, ident: _Proc | None) -> None:
