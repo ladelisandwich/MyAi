@@ -414,8 +414,16 @@ export function splitCode(text: string): TextPart[] {
 // eslint-disable-next-line no-control-regex
 export const HIDDEN_CHARS = /[\u0000-\u001f\u007f-\u009f­؜ᅟᅠ᠎​-‏‪-‮⁠-⁩﻿]/;
 
-/** A code part that is a command someone would paste into a terminal (gets a Copy button). Callers offer
- * Copy only in hints, which come from the error table; messages can carry git, pip or npm output. */
+// What chains, substitutes or redirects commands in bash or PowerShell: ; & | < > ( ) { } ! and $( ${. No
+// command in the error table needs one (`<branch>` is a placeholder to edit, not something to paste).
+const SHELL_CONTROL = /[;&|<>(){}!]|\$[({]/;
+
+/** A code part that is one plain command someone would paste into a terminal (gets a Copy button). Callers
+ * offer Copy only in hints, never in messages (they can carry git, pip or npm output). A hint is the error
+ * table's text from an honest computer, but it arrives from that computer (JobFailed.hint, run.json): a
+ * computer impersonated with stolen worker credentials could send `homemesh update allow; iwr …|iex`. So
+ * code that would run more than the command it starts with gets no Copy button; it is still shown. */
 export function isCommand(code: string): boolean {
-  return /^(homemesh|git|gh|loginctl|winget|journalctl|powershell|cd) \S/.test(code) && !HIDDEN_CHARS.test(code);
+  return /^(homemesh|git|gh|loginctl|winget|journalctl|powershell|cd) \S/.test(code) && !HIDDEN_CHARS.test(code)
+    && !SHELL_CONTROL.test(code);
 }

