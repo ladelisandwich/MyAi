@@ -3,6 +3,8 @@
 // - Errors are normalised to ApiError with the server's stable `code`, message and hint.
 // - Chat streaming uses fetch + ReadableStream to parse Server-Sent Events from a POST response.
 
+import type { UpdateApplyStarted, UpdateCheckStarted, UpdateDismissed } from "./types";
+
 export class ApiError extends Error {
   code: string;
   hint?: string;
@@ -80,6 +82,34 @@ export const api = {
     return res.json() as Promise<T>;
   },
 };
+
+const nodePath = (nodeId: string, action: string) => `/api/v1/nodes/${encodeURIComponent(nodeId)}/update/${action}`;
+
+/** Remote updates of one computer (owner only; see docs/API.md). Errors are ApiError with the server's code. */
+export const updatesApi = {
+  /** Start a check on that computer; the result arrives later in the node list (`update_check`). */
+  check: (nodeId: string) => api.post<UpdateCheckStarted>(nodePath(nodeId, "check")),
+  /** Install exactly `expectedCommit` (the commit the last check showed). */
+  apply: (nodeId: string, expectedCommit: string, force: boolean) =>
+    api.post<UpdateApplyStarted>(nodePath(nodeId, "apply"), { expected_commit: expectedCommit, force }),
+  /** Give up waiting for an update that stopped reporting (allowed after 15 minutes without word). */
+  dismiss: (nodeId: string) => api.post<UpdateDismissed>(nodePath(nodeId, "dismiss")),
+};
+
+/** True if the coordinator answers `GET /api/v1/system/health` (unauthenticated) within `timeoutMs`.
+ * Never throws; used while the hub restarts for an update. */
+export async function checkHealth(timeoutMs = 5000): Promise<boolean> {
+  const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : undefined;
+  try {
+    const res = await fetch("/api/v1/system/health", { credentials: "same-origin", cache: "no-store", signal: ctrl?.signal });
+    return res.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export interface SSEEvent {
   event: string;

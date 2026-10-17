@@ -174,6 +174,148 @@ export interface NodeSummary {
   heartbeat_age_s?: number | null;
   allow_remote_mode_change?: boolean | null;
   models: ModelInfo[];
+  // Remote updater (docs/UPDATING.md). Optional so a page never breaks on a node row without them;
+  // a missing value means the same as null.
+  /** What the computer runs (from its hello). null: a HomeMesh version without the updater. */
+  build?: BuildInfo | InvalidBuild | null;
+  /** The last check's outcome, stored by the hub (checks happen only on a click). */
+  update_check?: StoredUpdateCheck | null;
+  /** Job id of a check still running, so the page shows "Checking…" after a reload. */
+  update_check_pending?: string | null;
+  /** The latest remote update of this computer (any state). */
+  update?: NodeUpdate | null;
+  /** The latest run report on the live connection; also covers `homemesh update` run on that computer. */
+  update_live?: UpdateRunReport | null;
+}
+
+// ---------------------------------------------------------------- remote updates (protocol/update.py)
+
+/** Phases the runner writes, in order (`rolling_back` only after a failure). A newer runner may report a
+ * word this list doesn't have: show it with `phaseLabel()` from lib/update.ts, never assume the list. */
+export type UpdatePhase = "accepted" | "prechecks" | "building" | "draining" | "stopping" | "switching" | "starting"
+  | "verifying" | "rolling_back" | "cleanup";
+export type FinalStatus = "ok" | "ok_unconfirmed" | "already_up_to_date" | "rolled_back" | "failed" | "interrupted";
+export type UpdateRowState = "requested" | "running" | FinalStatus | "not_started" | "abandoned";
+export type BuildSource = "installer" | "updater" | "dev" | "unknown";
+export type BuildOS = "windows" | "linux" | "other";
+
+/** `{code, message, hint}`: a run error, a warning or a check error. Plain text (may contain `backticks`). */
+export interface UpdateIssue {
+  code: string;
+  message: string;
+  hint: string | null;
+}
+
+export interface UpdateProblem extends UpdateIssue {
+  blocking: boolean;
+}
+
+export interface UpdateCommit {
+  sha: string;
+  subject: string;
+  date: string | null;
+}
+
+export interface BuildInfo {
+  v: number;
+  version: string;
+  commit: string | null;
+  commit_date: string | null;
+  branch: string | null;
+  dirty: boolean | null;
+  source: BuildSource;
+  reason: string | null;
+  installed_at: string | null;
+  os: BuildOS;
+  can_update: boolean;
+  cannot_update_reason: string | null;
+  update_allowed: boolean;
+  source_dir: string | null;
+  logs_dir: string | null;
+}
+
+/** The computer sent a `build` the hub could not read. */
+export interface InvalidBuild {
+  invalid: true;
+}
+
+export interface UpdateCheckResult {
+  v: number;
+  ok: boolean;
+  checked_at: string | null;
+  allowed: boolean | null;
+  installed_commit: string | null;
+  installed_dirty: boolean | null;
+  head_commit: string | null;
+  branch: string | null;
+  remote: string | null;
+  upstream_ref: string | null;
+  upstream_commit: string | null;
+  upstream_date: string | null;
+  behind: number | null;
+  ahead: number | null;
+  commits: UpdateCommit[];
+  commits_truncated: boolean;
+  web_changed: boolean | null;
+  node_found: boolean | null;
+  migrations: boolean | null;
+  can_update: boolean;
+  problems: UpdateProblem[];
+  error: UpdateIssue | null;
+}
+
+/** `checked_at` is the hub's clock. */
+export type StoredUpdateCheck =
+  | { job_id: string; checked_at: string; result: UpdateCheckResult }
+  | { job_id: string; checked_at: string; error: UpdateIssue };
+
+export interface NodeUpdate {
+  id: string;
+  state: UpdateRowState;
+  phase: string | null;
+  run_id: string | null;
+  from_commit: string | null;
+  expected_commit: string;
+  requested_at: string;
+  last_report_at: string | null;
+  finished_at: string | null;
+  error: UpdateIssue | null;
+  warnings: UpdateIssue[];
+  log: string | null;
+  installed_commit: string | null;
+}
+
+export interface UpdateRunReport {
+  v: number;
+  run_id: string;
+  job_id: string | null;
+  origin: "remote" | "local";
+  phase: string;
+  status: FinalStatus | null;
+  expected_commit: string | null;
+  from_commit: string | null;
+  to_commit: string | null;
+  installed_commit: string | null;
+  started_at: string;
+  updated_at: string;
+  finished_at: string | null;
+  error: UpdateIssue | null;
+  warnings: UpdateIssue[];
+  log: string | null;
+}
+
+export interface UpdateCheckStarted {
+  job_id: string;
+}
+
+export interface UpdateApplyStarted {
+  update_id: string;
+  state: "requested";
+}
+
+export interface UpdateDismissed {
+  update_id: string;
+  state: "abandoned";
 }
 
 export interface ModelGroup {

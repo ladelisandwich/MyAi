@@ -33,7 +33,17 @@ self.addEventListener("fetch", (event) => {
     return;
   }
   if (event.request.mode === "navigate") {
-    // Network-first for the HTML shell so updates apply immediately; fall back to cache offline.
-    event.respondWith(fetch(event.request).catch(() => caches.match("/index.html")));
+    // Network-first for the HTML shell so updates apply immediately; fall back to cache offline. The cached
+    // copy follows the shell the network served last (its hashed assets were just loaded and cached), so a
+    // page opened while the coordinator is down, e.g. the hub restarting for its own update, is the current
+    // app with its recovery help, not the one from when this worker was first installed.
+    event.respondWith(fetch(event.request).then((res) => {
+      const type = res.headers.get("content-type") || "";
+      if (res.ok && (url.pathname === "/" || url.pathname === "/index.html") && type.startsWith("text/html")) {
+        const copy = res.clone();
+        caches.open(CACHE).then((c) => c.put("/index.html", copy));
+      }
+      return res;
+    }).catch(() => caches.match("/index.html")));
   }
 });

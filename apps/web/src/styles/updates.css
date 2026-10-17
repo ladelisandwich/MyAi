@@ -1,0 +1,36 @@
+/* Remote updates on the Computers page. Colours come only from the theme variables in app.css, so light
+   and dark both work. Long text (subjects, paths, commands) wraps instead of widening the page on phones. */
+
+.update-panel { display: flex; flex-direction: column; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.update-version { font-variant-numeric: tabular-nums; }
+.update-state { min-width: 0; }
+.update-state.ok { color: var(--ok); }
+.update-state.warn { color: var(--warn); }
+.update-state.danger { color: var(--danger); }
+.update-state .muted { color: var(--text-muted); }
+.update-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.update-blocking { font-size: 0.85rem; color: var(--text); background: var(--warn-soft); border-radius: var(--radius-sm); padding: 6px 8px; }
+.update-warnings { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: 0.8rem; color: var(--text-muted); }
+.update-copy-inline { height: 22px; padding: 0 6px; margin-left: 2px; font-size: 0.76rem; vertical-align: baseline; }
+
+.update-cmd { display: flex; align-items: flex-start; gap: 6px; min-width: 0; margin-top: 4px; }
+.update-cmd pre.block { flex: 1; min-width: 0; max-height: none; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
+
+.update-dialog .update-commits { list-style: none; margin: 0; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px;
+  max-height: 260px; overflow: auto; background: var(--bg-sunken); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.update-dialog .update-commits li { display: flex; gap: 8px; align-items: baseline; min-width: 0; font-size: 0.88rem; }
+.update-dialog .update-subject { min-width: 0; overflow-wrap: anywhere; }
+.update-dialog .update-sha { word-break: break-all; }
+.update-dialog .update-restart-note { margin: 0; }
+
+.update-recovery { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.update-recovery ol { margin: 0; padding-left: 1.3rem; display: flex; flex-direction: column; gap: 8px; }
+.update-hub-notice { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; overflow-wrap: anywhere; }
+
+/* Phones: the card's key/value list becomes one column so the update text and commands get the full width. */
+@media (max-width: 560px) {
+  .node-card .kv { grid-template-columns: minmax(0, 1fr); }
+  .node-card .kv dt { margin-top: 6px; }
+  .update-cmd { flex-direction: column; align-items: stretch; }
+  .update-cmd .btn { align-self: flex-start; }
+}
