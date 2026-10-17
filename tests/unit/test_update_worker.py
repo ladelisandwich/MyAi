@@ -15,7 +15,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from websockets.exceptions import ConnectionClosed, InvalidStatus
+from websockets.exceptions import ConnectionClosed, InvalidMessage, InvalidStatus
 from websockets.frames import Close
 
 from homemesh.common.config import HomeMeshConfig
@@ -559,6 +559,8 @@ def test_connection_failures_map_to_agent_states():
         (ConnectionRefusedError(), "unreachable"),
         (TimeoutError(), "unreachable"),
         (ValueError("bug in the new version"), "rejected"),
+        # The hub closed the connection during the HTTP upgrade (restarting, overloaded): says nothing about us.
+        (InvalidMessage("did not receive a valid HTTP response"), "unreachable"),
     ]
     for exc, state in cases:
         assert WorkerAgent.agent_state_for(exc) == state, exc
@@ -617,6 +619,45 @@ async def test_hello_and_heartbeats_carry_build_and_report_and_agent_json_follow
         await asyncio.wait_for(agent.run(), 15)
         agent_file = files.read_agent_file(wpaths)
         assert agent_file["state"] == "rejected" and "Invalid node credentials" in agent_file["detail"]
+    finally:
+        await h.stop()
+
+
+class SlowModelsBackend(MockBackend):
+    """Model listing as slow as an Ollama that was just started with the computer."""
+
+    async def list_models(self):
+        await asyncio.sleep(1.0)
+        return await super().list_models()
+
+
+@pytest.mark.slow
+async def test_a_slow_model_list_does_not_make_the_hub_refuse_the_hello(tmp_path, monkeypatch):
+    """The hub closes with 1002 when the hello is late, and agent.json then says "rejected", which rolls an
+    update back. So the hello must not wait for model listing or hardware detection after connecting."""
+    from harness import Harness, paths_for, wait_for
+    from homemesh.coordinator import nodes
+    from homemesh.worker.enroll import join
+
+    monkeypatch.setattr(nodes, "HELLO_TIMEOUT_S", 0.5)  # instead of 15 s; the models take 1 s here
+    h = Harness(tmp_path)
+    await h.start(roles=["coordinator"])
+    try:
+        await h.owner_client()
+        wpaths = paths_for(tmp_path / "w")
+        wpaths.ensure()
+        await asyncio.to_thread(join, h.base_url, await h.pairing_code(), wpaths, node_name="w1")
+        cfg = h.make_config(["worker"], name="w1")
+        cfg.worker.coordinator_url = h.base_url
+        agent = WorkerAgent(cfg, wpaths, backends={"mock": SlowModelsBackend("mock")})
+        task = asyncio.create_task(agent.run())
+        try:
+            await agent.wait_connected(15)
+            await wait_for(lambda: (files.read_agent_file(wpaths) or {}).get("state") == "connected", 5, 0.05,
+                           "agent.json saying connected")
+        finally:
+            await agent.stop()
+            await asyncio.wait_for(task, 10)
     finally:
         await h.stop()
 

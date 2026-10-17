@@ -33,7 +33,7 @@ from typing import Any
 
 from pydantic import ValidationError
 from websockets.asyncio.client import ClientConnection, connect
-from websockets.exceptions import ConnectionClosed, InvalidStatus, InvalidURI
+from websockets.exceptions import ConnectionClosed, InvalidMessage, InvalidStatus, InvalidURI
 
 from homemesh.common.config import HomeMeshConfig
 from homemesh.common.logging import get_logger
@@ -203,7 +203,7 @@ class WorkerAgent:
                 log.error("Worker stopped: %s", exc)
                 await self.updates.set_agent_state("rejected", str(exc))
                 return
-            except (OSError, ConnectionClosed, InvalidStatus, TimeoutError, ssl.SSLError) as exc:
+            except (OSError, ConnectionClosed, InvalidStatus, InvalidMessage, TimeoutError, ssl.SSLError) as exc:
                 self.last_error = self._describe(exc)
                 log.warning("Coordinator connection problem: %s", self.last_error)
                 await self.updates.set_agent_state(self.agent_state_for(exc), self.last_error)
@@ -212,7 +212,8 @@ class WorkerAgent:
             except Exception as exc:
                 self.last_error = f"{type(exc).__name__}: {exc}"
                 log.exception("Unexpected worker error")
-                await self.updates.set_agent_state("rejected", f"unexpected worker error: {self.last_error}")
+                await self.updates.set_agent_state(self.agent_state_for(exc),
+                                                   f"unexpected worker error: {self.last_error}")
             finally:
                 self._connected.clear()
                 self._ws = None
@@ -244,6 +245,10 @@ class WorkerAgent:
             return "rejected" if code == CLOSE_EXPECTED_HELLO or code in FATAL_CLOSE_CODES else "unreachable"
         if isinstance(exc, InvalidStatus):
             return "rejected" if 400 <= exc.response.status_code < 500 else "unreachable"
+        if isinstance(exc, InvalidMessage):
+            # No valid HTTP response to the upgrade request: the hub closed the connection during the handshake
+            # (restarting, overloaded, network) or something else answers there. Nothing about this code.
+            return "unreachable"
         if isinstance(exc, ssl.SSLCertVerificationError):
             return "rejected"
         if isinstance(exc, (OSError, TimeoutError, ssl.SSLError)):
@@ -284,6 +289,13 @@ class WorkerAgent:
         build = await self.updates.build_info()
         if self.updates.agent_state is None:  # once per process; a retry keeps the last outcome readable
             await self.updates.set_agent_state("connecting", creds.coordinator_url)
+        # Everything the hello carries is gathered BEFORE connecting. The coordinator closes a connection whose
+        # hello doesn't arrive within 15 s with 1002 "expected hello", which agent.json records as "rejected"
+        # (an update to this version is then rolled back); listing models (up to 30 s per backend) and hardware
+        # detection can be that slow right after a restart.
+        await self.refresh_models()
+        hw = await self.hardware()
+        await self.updates.refresh()  # the hello reports the latest update run, finalized if it died
         try:
             ws_cm = connect(
                 url, additional_headers={"Authorization": f"{pm.AUTH_SCHEME} {creds.node_id}:{creds.node_secret}",
@@ -296,9 +308,6 @@ class WorkerAgent:
             raise FatalWorkerError(f"Invalid coordinator URL {creds.coordinator_url!r}: {exc}") from exc
         async with ws_cm as ws:
             self._ws = ws
-            await self.refresh_models()
-            hw = await self.hardware()
-            await self.updates.refresh()  # the hello reports the latest update run, finalized if it died
             limits = pm.NodeLimits(
                 max_concurrent_jobs=self.cfg.worker.max_concurrent_jobs,
                 allow_cpu_inference=self.cfg.worker.allow_cpu_inference,
