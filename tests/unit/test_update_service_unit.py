@@ -49,7 +49,7 @@ def test_unit_gives_up_after_five_quick_failures(tmp_path):
 
 @pytest.mark.parametrize(("state", "systemd_stops"), [
     ("active", True), ("activating", True), ("reloading", True), ("deactivating", True),
-    ("inactive", False), ("failed", False)])
+    ("refreshing", True), ("maintenance", True), ("inactive", False), ("failed", False)])
 def test_stop_uses_systemd_in_every_state_it_manages(tmp_path, monkeypatch, state, systemd_stops):
     """'activating' is also a crashed unit waiting to auto-restart: only systemctl stops that."""
     unit = tmp_path / "homemesh.service"

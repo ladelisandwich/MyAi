@@ -221,6 +221,7 @@ def start(paths: AppPaths) -> tuple[bool, str]:
 
 
 UNIT_ACTIVE_STATES = ("active", "activating", "reloading")
+UNIT_STOPPED_STATES = ("inactive", "failed")
 
 
 def _unit_state() -> str:
@@ -251,9 +252,10 @@ def _wait_ready(paths: AppPaths, gave_up: Callable[[], bool], timeout_s: float =
 def stop(paths: AppPaths, timeout: float = 30.0, *, force: bool = False) -> str:
     if sys.platform.startswith("linux") and unit_path().exists() and systemd_available():
         # Every state except inactive/failed is systemd's to stop: "activating" is also a unit waiting to
-        # auto-restart after a crash, which a plain kill would not stop (the next restart comes 5 s later).
+        # auto-restart after a crash, which a plain kill would not stop (the next restart comes 5 s later);
+        # newer systemd versions add states (refreshing, maintenance). Stopping an idle unit is a no-op.
         state = _unit_state()
-        if state in UNIT_ACTIVE_STATES or state == "deactivating":
+        if state and state not in UNIT_STOPPED_STATES:
             run_quiet(["systemctl", "--user", "stop", UNIT_NAME], check=False)
             if not read_pid(paths):
                 return "Stopped via systemd."
